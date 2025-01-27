@@ -7,6 +7,7 @@ import re
 from languagechange.utils import LiteralTime
 from sortedcontainers import SortedKeyList
 import logging
+from bs4 import BeautifulSoup
 
 logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
 
@@ -300,7 +301,78 @@ class VerticalCorpus(Corpus):
 
             else:
                 raise Exception('Format not recognized')
+            
 
+# Should be able to load and parse a corpus in XML format.
+# Supports only tokenized corpora so far.
+class XMLCorpus(Corpus):
+
+    def __init__(self, path, bos='<sentence.*>', eos='</sentence>',token_tag='token',token_delimiter='<token.*>', is_lemmatized=False, lemma_tag=None, **args):
+        if not 'name' in args:
+            name = path
+        super().__init__(name, **args)
+        self.path = path
+
+        self.is_lemmatized = is_lemmatized
+        if lemma_tag:
+            self.lemma_tag = lemma_tag
+        else:
+            self.lemma_tag = ''
+
+        self.bos_regex = re.compile(bos)
+        self.eos_regex = re.compile(eos)
+        self.token_regex = re.compile(token_delimiter)
+        self.token_tag = token_tag
+
+
+    def line_iterator(self):
+        if os.path.isdir(self.path):
+            fnames = self.folder_iterator(self.path)
+        else:
+            fnames = [self.path]
+
+        def get_data(line):
+            data = {}
+            data['raw_text'] = ' '.join(line)
+            if self.is_lemmatized:
+                data['lemmas'] = line
+            else:
+                data['tokens'] = line
+            return data
+
+        for fname in fnames:
+            if fname.endswith('.xml'):
+                with open(fname,'r') as f:
+                    line = []
+                    for xml_line in f:
+                        # Beginning of sentence
+                        if self.bos_regex.search(xml_line) != None:
+                            line = []
+                        # The line contains a token
+                        if self.token_regex.search(xml_line) != None:
+                            soup = BeautifulSoup(xml_line,'xml')
+                            # Extract either the lemma(s) or the token(s) on each line
+                            if self.is_lemmatized and self.lemma_tag != '':
+                                token = [t.get(self.lemma_tag) for t in soup.find_all(self.token_tag)]
+                            else:
+                                token = [t.get_text() for t in soup.find_all(self.token_tag)]
+                            line.extend(token)
+
+                        # End of sentence
+                        if self.eos_regex.search(xml_line) != None:
+                            data = get_data(line)
+                            yield Line(fname=fname, **data)
+                        
+
+            else:
+                raise Exception('Format not recognized')
+
+
+# Should be a class for handling XML corpora specifically from spraakbanken.gu.se
+class SprakBankenCorpus(XMLCorpus):
+
+    def __init__(self, name, language=None, time=LiteralTime('no time specification'), **args):
+        super().__init__(name, language, time, **args)
 
 
 class HistoricalCorpus(SortedKeyList):
