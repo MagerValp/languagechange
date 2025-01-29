@@ -7,6 +7,15 @@ from languagechange.usages import TargetUsage
 import transformers
 from transformers import AutoTokenizer, AutoModel
 from WordTransformer import WordTransformer, InputExample
+import logging
+
+# Configure logging with a basic setup
+logging.basicConfig(
+    level=logging.INFO, 
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
 
 # Suppress transformer logging
 transformers.logging.set_verbosity_error()
@@ -38,8 +47,10 @@ class ContextualizedModel():
         """
 
         if not device in ['cuda', 'cpu']:
+            logger.error("Invalid device specified: Device must be in ['cuda', 'cpu']")
             raise ValueError("Device must be in ['cuda', 'cpu']")
         if not isinstance(n_extra_tokens, int):
+            logger.error("n_extra_tokens must be an integer")
             raise ValueError("batch_size must be an integer")
 
         self._n_extra_tokens = n_extra_tokens
@@ -64,9 +75,11 @@ class ContextualizedModel():
         """
 
         if not isinstance(batch_size, int):
+            logger.error("n_extra_tokens must be an integer")
             raise ValueError("batch_size must be an integer")
 
         if not (isinstance(target_usages, TargetUsage) or isinstance(target_usages, list)):
+            logger.error("target_usages must be Union[dict, List[dict]]")
             raise ValueError("target_usages must be Union[dict, List[dict]]")
 
 class ContextualizedEmbeddings():
@@ -122,7 +135,7 @@ class XL_LEXEME(ContextualizedModel):
             device (str): Device to use ('cuda' or 'cpu'). Defaults to 'cuda'.
             n_extra_tokens (int): Extra tokens for encoding. Defaults to 0.
         """
-        
+        logger.info("Initializing XL_LEXEME model.")
         super().__init__(device=device, n_extra_tokens=n_extra_tokens)
 
         self._model = WordTransformer(pretrained_model, device=device)
@@ -140,6 +153,7 @@ class XL_LEXEME(ContextualizedModel):
             np.array: Encoded embeddings.
         """
         
+        logger.info("Encoding target usages with batch size: %d", batch_size)
         super(XL_LEXEME, self).encode(target_usages=target_usages, batch_size=batch_size)
         if isinstance(target_usages, TargetUsage):
             target_usages = [target_usages]
@@ -171,6 +185,7 @@ class BERT(ContextualizedModel):
             n_extra_tokens (int): Extra tokens for encoding. Defaults to 2.
         """
         
+        logger.info("Initializing BERT model.")
         super().__init__(device=device, n_extra_tokens=n_extra_tokens)
 
         self._tokenizer = AutoTokenizer.from_pretrained(pretrained_model)
@@ -189,7 +204,7 @@ class BERT(ContextualizedModel):
             Tuple[List[str], List[str], List[str]]: Tokenized left, target, and right context.
         """
         
-        
+        logger.info("Splitting context for target usage")
         start, end = target_usage.start(), target_usage.end()
 
         right_context = target_usage.text()[:start]
@@ -215,6 +230,7 @@ class BERT(ContextualizedModel):
             Tuple[List[str], List[str], List[str]]: Trimmed left, target, and right tokens.
         """
 
+        logger.info("Centering usage within maximum sequence length")
         max_seq_len = self._tokenizer.model_max_length
 
         overflow_left = len(left_tokens) - int((max_seq_len - len(target_tokens)) / 2)
@@ -245,7 +261,7 @@ class BERT(ContextualizedModel):
             Tuple[List[str], List[str], List[str]]: Tokenized sequences with special tokens.
         """
         
-        
+        logger.info("Adding special tokens")
         left_tokens = [self._tokenizer.cls_token] + left_tokens
         right_tokens = right_tokens + [self._tokenizer.sep_token]
         return left_tokens, target_tokens, right_tokens
@@ -261,6 +277,7 @@ class BERT(ContextualizedModel):
             dict[str, Union[list[int], Any]]: Input IDs, attention masks, and token type IDs.
         """
         
+        logger.info("Processing input tokens")
         max_seq_len = self._tokenizer.model_max_length
 
         input_ids_ = self._tokenizer.convert_tokens_to_ids(tokens)
@@ -291,7 +308,7 @@ class BERT(ContextualizedModel):
             np.array: Batch of encoded embeddings.
         """
         
-        
+        logger.info("Batch encoding %d target usages", len(target_usages))
         target_embeddings = list()
         examples = defaultdict(list)
         target_offsets = defaultdict(list)
@@ -339,7 +356,7 @@ class BERT(ContextualizedModel):
             np.array: Array of encoded embeddings.
         """
         
-        
+        logger.info("Starting encoding process with batch size: %d", batch_size)
         super(BERT, self).encode(target_usages=target_usages, batch_size=batch_size)
 
         target_embeddings = list()
@@ -373,6 +390,7 @@ class RoBERTa(BERT):
             n_extra_tokens (int): Extra tokens for encoding. Defaults to 2.
         """
         
+        logger.info("Initializing RoBERTa model.")
         super().__init__(pretrained_model=pretrained_model, device=device, n_extra_tokens=n_extra_tokens)
 
         self._token_type_ids = False

@@ -15,6 +15,15 @@ from sklearn.utils.extmath import randomized_svd
 from sklearn.random_projection import sparse_random_matrix
 from scipy.sparse import csr_matrix
 env = os.environ.copy()
+import logging
+
+# Configure logging with a basic setup
+logging.basicConfig(
+    level=logging.INFO, 
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
 
 class RepresentationModel(ABC):
     """
@@ -40,6 +49,7 @@ class StaticModel(RepresentationModel, dict):
     """
 
     def __init__(self, matrix_path=None, format='w2v'):
+        logger.info("Initializing StaticModel")
         self.space = None
         self.matrix_path = matrix_path
         self.format = format
@@ -58,6 +68,7 @@ class StaticModel(RepresentationModel, dict):
         Load the vector space from the specified file.
         """
         
+        logger.info("Loading vector space from %s", self.matrix_path)
         self.space = Space(self.matrix_path, format=self.format)
 
 
@@ -76,6 +87,7 @@ class StaticModel(RepresentationModel, dict):
         """
         
         if self.space == None:
+            logger.error('Space is not loaded')
             raise Exception('Space is not loaded')
         return self.space.matrix[self.space.row2id[k]]
 
@@ -189,8 +201,18 @@ class CountModel(StaticModel):
 
 
 class PPMI(CountModel):
+    """
+    Positive Pointwise Mutual Information (PPMI) model that transforms a co-occurrence matrix.
+
+    Attributes:
+        count_model (CountModel): The count-based model to transform.
+        shifting_parameter (int): Parameter to shift values after applying log weighting.
+        smoothing_parameter (int): Parameter to smooth the matrix values.
+        savepath (str): Path to save the PPMI matrix.
+    """
 
     def __init__(self, count_model:CountModel, shifting_parameter:int, smoothing_parameter:int, savepath:str):
+        logger.info("Initializing PPMI model")
         super(PPMI,self).__init__(self,count_model.window_size, count_model.savepath)
         self.count_model = count_model
         self.shifting_parameter = shifting_parameter
@@ -211,13 +233,15 @@ class PPMI(CountModel):
 
         """
 
-        logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
-        logging.info(__file__.upper())
+        logger.info("Starting PPMI encoding process")
         start_time = time.time()    
 
         # Load input matrix
         space = Space(self.count_model.matrix_path)   
 
+        # Apply transformations
+        logger.info("Applying transformations: EPMI weighting, log weighting, shifting")
+        
         # Apply EPMI weighting
         space.epmi_weighting(self.smoothing_parameter)
         
@@ -242,11 +266,22 @@ class PPMI(CountModel):
         # Save the matrix
         outSpace.save(self.savepath)
 
-        logging.info("--- %s seconds ---" % (time.time() - start_time))     
-
+        logger.info("PPMI encoding completed in %s seconds", time.time() - start_time)
+        
+        
 class SVD(StaticModel):
+    """
+    Singular Value Decomposition (SVD) model that reduces the dimensionality of a matrix.
+
+    Attributes:
+        count_model (CountModel): The input count-based model.
+        dimensionality (int): Target dimensionality for the reduced matrix.
+        gamma (float): Weighting parameter for singular values.
+        savepath (str): Path to save the reduced matrix.
+    """
 
     def __init__(self, count_model:CountModel, dimensionality:int, gamma:float, savepath:str):
+        logger.info("Initializing SVD model")
         super(SVD,self).__init__()
         self.count_model = count_model
         self.dimensionality = dimensionality
@@ -268,8 +303,7 @@ class SVD(StaticModel):
 
         """
 
-        logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
-        logging.info(__file__.upper())
+        logger.info("Starting SVD encoding process")
         start_time = time.time()    
 
         # Load input matrix
@@ -282,6 +316,7 @@ class SVD(StaticModel):
         id2column = space.id2column
 
         # Apply SVD
+        logger.info("Applying truncated SVD")
         u, s, v = randomized_svd(matrix, n_components=self.dimensionality, n_iter=5, transpose=False)
 
         # Weight matrix
@@ -303,13 +338,20 @@ class SVD(StaticModel):
         # Save the matrix
         outSpace.save(self.savepath, format='w2v')
 
-        logging.info("--- %s seconds ---" % (time.time() - start_time))
+        logger.info("SVD encoding completed in %s seconds", time.time() - start_time)
 
 
 # todo: add corpus
 class RandomIndexing(StaticModel):
+    """
+    Random Indexing model that creates low-dimensional vector spaces from a co-occurrence matrix.
+
+    Attributes:
+        window_size (int): Size of the context window for random indexing.
+    """
 
     def __init__(self):
+        logger.info("Initializing RandomIndexing model")
         super(RandomIndexing,self).__init__()
         self.align_strategies = {'OP', 'SRV', 'WI'}
         pass
@@ -323,8 +365,7 @@ class RandomIndexing(StaticModel):
         Create low-dimensional vector space by sparse random indexing from co-occurrence matrix.
         """        
         
-        logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
-        logging.info(__file__.upper())
+        logger.info("Starting RandomIndexing encoding process")
         start_time = time.time()    
         
         # Load input matrix
@@ -347,4 +388,4 @@ class RandomIndexing(StaticModel):
         # Save the matrix
         outSpace.save(self.savepath, format='w2v')
 
-        logging.info("--- %s seconds ---" % (time.time() - start_time))  
+        logger.info("RandomIndexing encoding completed in %s seconds", time.time() - start_time)
