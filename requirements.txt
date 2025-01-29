@@ -2,3 +2,5 @@ dload
 sortedcontainers
 bs4
 lxml
+gensim
+trankit
