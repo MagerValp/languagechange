@@ -8,15 +8,34 @@ import transformers
 from transformers import AutoTokenizer, AutoModel
 from WordTransformer import WordTransformer, InputExample
 
+# Suppress transformer logging
 transformers.logging.set_verbosity_error()
 
 class ContextualizedModel():
+    """
+    Abstract base class for contextualized embedding models.
+
+    Attributes:
+        device (str): The device to run the model on ('cuda' or 'cpu').
+        n_extra_tokens (int): Additional tokens to consider during encoding.
+    """
 
     @abstractmethod
     def __init__(self,
                  device: str = 'cuda',
                  n_extra_tokens: int = 0,
                  *args, **kwargs):
+        """
+        Initialize the contextualized model.
+
+        Args:
+            device (str): 'cuda' or 'cpu'. Defaults to 'cuda'.
+            n_extra_tokens (int): Number of extra tokens. Defaults to 0.
+
+        Raises:
+            ValueError: If the device is not 'cuda' or 'cpu'.
+            ValueError: If n_extra_tokens is not an integer.
+        """
 
         if not device in ['cuda', 'cpu']:
             raise ValueError("Device must be in ['cuda', 'cpu']")
@@ -29,6 +48,20 @@ class ContextualizedModel():
     @abstractmethod
     def encode(self, target_usages: Union[TargetUsage, List[TargetUsage]],
                batch_size: int = 8) -> np.array:
+        """
+        Encode target usages to generate embeddings.
+
+        Args:
+            target_usages (Union[TargetUsage, List[TargetUsage]]): Usage data to encode.
+            batch_size (int): Batch size for encoding. Defaults to 8.
+
+        Returns:
+            np.array: Encoded embeddings.
+
+        Raises:
+            ValueError: If batch_size is not an integer.
+            ValueError: If target_usages is not a valid type.
+        """
 
         if not isinstance(batch_size, int):
             raise ValueError("batch_size must be an integer")
@@ -37,6 +70,10 @@ class ContextualizedModel():
             raise ValueError("target_usages must be Union[dict, List[dict]]")
 
 class ContextualizedEmbeddings():
+    """
+    Class to manage contextualized embeddings.
+    """
+    
     def __str__(self):
         return 'ContextualizedEmbeddings({\n    features: ' + f'{self.column_names}' + f',\n    num_rows: {self.num_rows}' + '\n})'
 
@@ -46,6 +83,17 @@ class ContextualizedEmbeddings():
     @staticmethod
     def from_usages(target_usages: List[TargetUsage], raw_embedding: np.array):
         columns = defaultdict(list)
+        """
+        Create a ContextualizedEmbeddings instance from target usages and raw embeddings.
+
+        Args:
+            target_usages (List[TargetUsage]): List of target usages.
+            raw_embedding (np.array): Embeddings generated from the usages.
+
+        Returns:
+            ContextualizedEmbeddings: An instance with formatted data.
+        """
+        
 
         for i, target_usage in enumerate(target_usages):
             columns['token'].append(target_usage.token)
@@ -59,16 +107,39 @@ class ContextualizedEmbeddings():
         return embs.with_format("np")
 
 class XL_LEXEME(ContextualizedModel):
+    """
+    Contextualized model for XL-LEXEME embeddings.
+    """
 
     def __init__(self, pretrained_model: str = 'pierluigic/xl-lexeme',
                  device: str = 'cuda',
                  n_extra_tokens: int = 0):
+        """
+        Initialize the XL_LEXEME model.
+
+        Args:
+            pretrained_model (str): Name of the pretrained model. Defaults to 'pierluigic/xl-lexeme'.
+            device (str): Device to use ('cuda' or 'cpu'). Defaults to 'cuda'.
+            n_extra_tokens (int): Extra tokens for encoding. Defaults to 0.
+        """
+        
         super().__init__(device=device, n_extra_tokens=n_extra_tokens)
 
         self._model = WordTransformer(pretrained_model, device=device)
 
     def encode(self, target_usages: Union[TargetUsage, List[TargetUsage]],
                batch_size: int = 8) -> np.array:
+        """
+        Encode target usages with XL_LEXEME model.
+
+        Args:
+            target_usages (Union[TargetUsage, List[TargetUsage]]): Usage data to encode.
+            batch_size (int): Batch size for encoding. Defaults to 8.
+
+        Returns:
+            np.array: Encoded embeddings.
+        """
+        
         super(XL_LEXEME, self).encode(target_usages=target_usages, batch_size=batch_size)
         if isinstance(target_usages, TargetUsage):
             target_usages = [target_usages]
@@ -84,9 +155,22 @@ class XL_LEXEME(ContextualizedModel):
         return raw_embeddings
 
 class BERT(ContextualizedModel):
+    """
+    Contextualized model for BERT embeddings.
+    """
+    
     def __init__(self, pretrained_model: str,
                  device: str = 'cuda',
                  n_extra_tokens: int = 2):
+        """
+        Initialize the BERT model.
+
+        Args:
+            pretrained_model (str): Name of the pretrained model.
+            device (str): Device to use ('cuda' or 'cpu'). Defaults to 'cuda'.
+            n_extra_tokens (int): Extra tokens for encoding. Defaults to 2.
+        """
+        
         super().__init__(device=device, n_extra_tokens=n_extra_tokens)
 
         self._tokenizer = AutoTokenizer.from_pretrained(pretrained_model)
@@ -95,6 +179,17 @@ class BERT(ContextualizedModel):
         self._token_type_ids = True
 
     def split_context(self, target_usage: TargetUsage) -> Tuple[List[str], List[str], List[str]]:
+        """
+        Split the target usage into left, target, and right context tokens.
+
+        Args:
+            target_usage (TargetUsage): The usage data.
+
+        Returns:
+            Tuple[List[str], List[str], List[str]]: Tokenized left, target, and right context.
+        """
+        
+        
         start, end = target_usage.start(), target_usage.end()
 
         right_context = target_usage.text()[:start]
@@ -108,6 +203,17 @@ class BERT(ContextualizedModel):
         return left_tokens, target_tokens, right_tokens
 
     def center_usage(self, left_tokens: List[str], target_tokens: List[str], right_tokens: List[str]) -> Tuple[List[str], List[str], List[str]]:
+        """
+        Adjust tokens to fit within the model's maximum sequence length.
+
+        Args:
+            left_tokens (List[str]): Tokens from left context.
+            target_tokens (List[str]): Tokens from target usage.
+            right_tokens (List[str]): Tokens from right context.
+
+        Returns:
+            Tuple[List[str], List[str], List[str]]: Trimmed left, target, and right tokens.
+        """
 
         max_seq_len = self._tokenizer.model_max_length
 
@@ -127,11 +233,34 @@ class BERT(ContextualizedModel):
         return left_tokens, target_tokens, right_tokens
 
     def add_special_tokens(self, left_tokens: List[str], target_tokens: List[str], right_tokens: List[str]) -> Tuple[List[str], List[str], List[str]]:
+        """
+        Add special tokens to the tokenized sequences.
+
+        Args:
+            left_tokens (List[str]): Left context tokens.
+            target_tokens (List[str]): Target tokens.
+            right_tokens (List[str]): Right context tokens.
+
+        Returns:
+            Tuple[List[str], List[str], List[str]]: Tokenized sequences with special tokens.
+        """
+        
+        
         left_tokens = [self._tokenizer.cls_token] + left_tokens
         right_tokens = right_tokens + [self._tokenizer.sep_token]
         return left_tokens, target_tokens, right_tokens
 
     def process_input_tokens(self, tokens: List[str]) -> dict[str, Union[list[int], Any]]:
+        """
+        Convert tokens to input IDs and attention masks for the model.
+
+        Args:
+            tokens (List[str]): Tokens to be processed.
+
+        Returns:
+            dict[str, Union[list[int], Any]]: Input IDs, attention masks, and token type IDs.
+        """
+        
         max_seq_len = self._tokenizer.model_max_length
 
         input_ids_ = self._tokenizer.convert_tokens_to_ids(tokens)
@@ -152,6 +281,17 @@ class BERT(ContextualizedModel):
         return processed_input
 
     def batch_encode(self, target_usages: List[TargetUsage]) -> np.array:
+        """
+        Encode a batch of target usages and generate embeddings.
+
+        Args:
+            target_usages (List[TargetUsage]): List of target usages.
+
+        Returns:
+            np.array: Batch of encoded embeddings.
+        """
+        
+        
         target_embeddings = list()
         examples = defaultdict(list)
         target_offsets = defaultdict(list)
@@ -188,6 +328,18 @@ class BERT(ContextualizedModel):
         return np.array(target_embeddings)
 
     def encode(self, target_usages: Union[TargetUsage, List[TargetUsage]], batch_size: int = 8) -> np.array:
+        """
+        Encode target usages in batches.
+
+        Args:
+            target_usages (Union[TargetUsage, List[TargetUsage]]): List of target usages.
+            batch_size (int): Batch size for encoding. Defaults to 8.
+
+        Returns:
+            np.array: Array of encoded embeddings.
+        """
+        
+        
         super(BERT, self).encode(target_usages=target_usages, batch_size=batch_size)
 
         target_embeddings = list()
@@ -204,9 +356,23 @@ class BERT(ContextualizedModel):
 
 
 class RoBERTa(BERT):
+    """
+    Contextualized model for RoBERTa embeddings, inheriting from BERT.
+    """
+    
+    
     def __init__(self, pretrained_model: str,
                  device: str = 'cuda',
                  n_extra_tokens: int = 2):
+        """
+        Initialize the RoBERTa model.
+
+        Args:
+            pretrained_model (str): Name of the pretrained model.
+            device (str): Device to use ('cuda' or 'cpu'). Defaults to 'cuda'.
+            n_extra_tokens (int): Extra tokens for encoding. Defaults to 2.
+        """
+        
         super().__init__(pretrained_model=pretrained_model, device=device, n_extra_tokens=n_extra_tokens)
 
         self._token_type_ids = False

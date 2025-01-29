@@ -17,13 +17,27 @@ from scipy.sparse import csr_matrix
 env = os.environ.copy()
 
 class RepresentationModel(ABC):
+    """
+    Abstract base class for all representation models. Provides a template for encoding methods.
+    """
 
     @abstractmethod
     def encode(self, *args, **kwargs):
+        """
+        Abstract method for encoding data into a vector representation. Should be implemented by subclasses.
+        """
+        
         pass
 
 # todo
 class StaticModel(RepresentationModel, dict):
+    """
+    Base class for static word embedding models. Manages loading and accessing vector spaces.
+    
+    Attributes:
+        matrix_path (str): Path to the matrix file.
+        format (str): Format of the matrix file (e.g., 'w2v', 'npz').
+    """
 
     def __init__(self, matrix_path=None, format='w2v'):
         self.space = None
@@ -32,29 +46,79 @@ class StaticModel(RepresentationModel, dict):
 
     @abstractmethod
     def encode(self):
+        """
+        Abstract method to perform encoding operations. Must be implemented in subclasses.
+        """
+        
         pass
 
     @abstractmethod
     def load(self):
+        """
+        Load the vector space from the specified file.
+        """
+        
         self.space = Space(self.matrix_path, format=self.format)
 
 
     def __getitem__(self, k):
+        """
+        Get the vector representation for a given word.
+
+        Args:
+            k (str): The word to look up.
+        
+        Returns:
+            np.array: Vector representation of the word.
+        
+        Raises:
+            Exception: If the space is not loaded.
+        """
+        
         if self.space == None:
             raise Exception('Space is not loaded')
         return self.space.matrix[self.space.row2id[k]]
 
     def matrix(self):
+        """
+        Retrieve the entire matrix of word vectors.
+
+        Returns:
+            scipy.sparse.spmatrix: The matrix of word vectors.
+        
+        Raises:
+            Exception: If the space is not loaded.
+        """
+        
         if self.space == None:
             raise Exception('Space is not loaded')
         return self.space.matrix
 
     def row2word(self):
+        """
+        Retrieve the mapping of row indices to words.
+
+        Returns:
+            list: List of words corresponding to matrix rows.
+        
+        Raises:
+            Exception: If the space is not loaded.
+        """
+        
         if self.space == None:
             raise Exception('Space is not loaded')
         return self.space.id2row
 
 class CountModel(StaticModel):
+    """
+    Count-based word embedding model that builds a co-occurrence matrix from a corpus.
+
+    Attributes:
+        corpus (LinebyLineCorpus): The corpus to process.
+        window_size (int): The size of the context window.
+        savepath (str): Path to save the generated matrix.
+    """
+    
 
     def __init__(self, corpus:LinebyLineCorpus, window_size:int, savepath:str):
         super(CountModel,self).__init__()
@@ -65,6 +129,10 @@ class CountModel(StaticModel):
         self.matrix_path = os.path.join(self.savepath)
 
     def encode(self):
+        """
+        Build a co-occurrence matrix from the corpus and save it to the specified path.
+        """
+        
         # Previously
         #subprocess.run(["python3", "-m", "LSCDetection.representations.count", self.corpus.path, self.savepath, str(self.window_size)])
 
