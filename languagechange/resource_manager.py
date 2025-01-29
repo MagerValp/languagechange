@@ -4,6 +4,14 @@ import urllib.request
 from pathlib import Path
 from platformdirs import user_cache_dir
 import dload
+import logging
+
+# Configure logging with a basic setup
+logging.basicConfig(
+    level=logging.INFO, 
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 class LanguageChange():
 
@@ -26,22 +34,22 @@ class LanguageChange():
         j = 0
         list_resources = []
 
-        print('Available resources:\n')
+        logger.info('Available resources:\n')
 
         for resource_type in self.resource_hub:
-            print('########################')
-            print('###### '+resource_type+' ######')
-            print('########################\n')
+            logger.info('########################')
+            logger.info('###### '+resource_type+' ######')
+            logger.info('########################\n')
             for resource_name in self.resource_hub[resource_type]:
-                print(resource_name)
-                print('---------------------')
+                logger.info(resource_name)
+                logger.info('---------------------')
                 for dataset in self.resource_hub[resource_type][resource_name]:
-                    print('\t -'+dataset)
+                    logger.info('\t -'+dataset)
                     for version in self.resource_hub[resource_type][resource_name][dataset]:
-                        print(f'\t\t{j}) '+version)
+                        logger.info(f'\t\t{j}) '+version)
                         list_resources.append([resource_type,resource_name,dataset,version])
                         j = j + 1
-                print('\n')
+                logger.info('\n')
 
         findchoice = False
 
@@ -52,9 +60,9 @@ class LanguageChange():
                 if choice >= -1 and choice <= j:
                     findchoice = True
                 else:
-                    print(f'Only numbers in the range (0-{j}) are allowed, digit -1 to exit.')
+                    logger.info(f'Only numbers in the range (0-{j}) are allowed, digit -1 to exit.')
             except:
-                print(f'Only numbers in the range (0-{j}) are allowed, digit -1 to exit.')
+                logger.error(f'Only numbers in the range (0-{j}) are allowed, digit -1 to exit.')
 
         if not choice == -1:
 
@@ -67,9 +75,9 @@ class LanguageChange():
             
             confirm = options[confirm]
             if confirm:
-                print('Downloading the required resource...')
+                logger.info('Downloading the required resource...')
                 self.download(*list_resources[choice])
-                print('Completed!')
+                logger.info('Completed!')
             else:
                 self.download_ui()
 
@@ -81,7 +89,7 @@ class LanguageChange():
             dload.save_unzip(url, destination_path)
             return os.path.join(self.resources_dir,resource_type,resource_name,dataset,version)
         except:
-            print('ERROR: Cannot download the resource.')
+            logger.error('ERROR: Cannot download the resource.')
             return None
 
     def get_resource(self, resource_type, resource_name, dataset, version):
