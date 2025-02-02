@@ -325,6 +325,13 @@ class XMLCorpus(Corpus):
         self.token_tag = token_tag
 
 
+    def get_special_token(self, tag, special_tag):
+        content = tag.get(special_tag)
+        if content != None:
+            return content
+        return tag.get_text()
+
+
     def line_iterator(self):
         if os.path.isdir(self.path):
             fnames = self.folder_iterator(self.path)
@@ -353,10 +360,10 @@ class XMLCorpus(Corpus):
                             soup = BeautifulSoup(xml_line,'xml')
                             # Extract either the lemma(s) or the token(s) on each line
                             if self.is_lemmatized and self.lemma_tag != '':
-                                token = [t.get(self.lemma_tag) for t in soup.find_all(self.token_tag)]
+                                tokens = [self.get_special_token(t,self.lemma_tag) for t in soup.find_all(self.token_tag)]
                             else:
-                                token = [t.get_text() for t in soup.find_all(self.token_tag)]
-                            line.extend(token)
+                                tokens = [t.get_text() for t in soup.find_all(self.token_tag)]
+                            line.extend(tokens)
 
                         # End of sentence
                         if self.eos_regex.search(xml_line) != None:
@@ -368,13 +375,24 @@ class XMLCorpus(Corpus):
                 raise Exception('Format not recognized')
 
 
-# Should be a class for handling XML corpora specifically from spraakbanken.gu.se
+# A class for handling XML corpora specifically from spraakbanken.gu.se
 class SprakBankenCorpus(XMLCorpus):
 
-    def __init__(self, name, language=None, time=LiteralTime('no time specification'), **args):
-        super().__init__(name, language, time, **args)
+    def __init__(self, path, bos='<sentence.*>', eos='</sentence>',token_tag='token',token_delimiter='<token.*>', is_lemmatized=True, lemma_tag='lemma', **args):
+        super().__init__(path, bos='<sentence.*>', eos='</sentence>',token_tag='token',token_delimiter='<token.*>', is_lemmatized=True, lemma_tag='lemma', **args)
 
 
+    # Function to get lemma if it exists
+    def get_special_token(self, tag, special_tag):
+        content = tag.get(special_tag)
+        if content != None:
+            content = content.strip("|").split("|")
+            if content != ['']:
+                return content[0]
+        return tag.get_text()
+
+
+# todo: add ways to extract the year from corpora
 class HistoricalCorpus(SortedKeyList):
 
     def __init__(self, corpora:list[Corpus]):
