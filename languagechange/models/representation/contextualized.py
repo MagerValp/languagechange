@@ -211,9 +211,9 @@ class BERT(ContextualizedModel):
         token_occurrence = target_usage.text()[start:end]
         left_context = target_usage.text()[end:]
 
-        left_tokens = self._tokenizer.tokenize(right_context, return_tensors='pt')
-        target_tokens = self._tokenizer.tokenize(token_occurrence, return_tensors='pt')
-        right_tokens = self._tokenizer.tokenize(left_context, return_tensors='pt')
+        left_tokens = self._tokenizer.tokenize(right_context, return_tensors='pt',add_special_tokens=False)
+        target_tokens = self._tokenizer.tokenize(token_occurrence, return_tensors='pt',add_special_tokens=False)
+        right_tokens = self._tokenizer.tokenize(left_context, return_tensors='pt',add_special_tokens=False)
 
         return left_tokens, target_tokens, right_tokens
 
@@ -232,9 +232,9 @@ class BERT(ContextualizedModel):
 
         logger.info("Centering usage within maximum sequence length")
         max_seq_len = self._tokenizer.model_max_length
-
-        overflow_left = len(left_tokens) - int((max_seq_len - len(target_tokens)) / 2)
-        overflow_right = len(right_tokens) - int((max_seq_len - len(target_tokens)) / 2)
+        
+        overflow_left = len(left_tokens) - int((max_seq_len -1 -len(target_tokens)) / 2)
+        overflow_right = len(right_tokens) - int((max_seq_len -1 -len(target_tokens)) / 2)
 
         if overflow_left > 0 and overflow_right > 0:
             left_tokens = left_tokens[overflow_left:]
@@ -316,6 +316,7 @@ class BERT(ContextualizedModel):
         for target_usage in target_usages:
             left_tokens, target_tokens, right_tokens = self.split_context(target_usage)
             left_tokens, target_tokens, right_tokens = self.center_usage(left_tokens, target_tokens, right_tokens)
+            left_tokens, target_tokens, right_tokens = self.add_special_tokens(left_tokens, target_tokens, right_tokens)
 
             # start and end in terms of tokens
             start, end = len(left_tokens), len(left_tokens) + len(target_tokens)
