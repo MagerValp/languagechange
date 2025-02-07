@@ -379,7 +379,7 @@ class XMLCorpus(Corpus):
 class SprakBankenCorpus(XMLCorpus):
 
     def __init__(self, path, bos='<sentence.*>', eos='</sentence>',token_tag='token',token_delimiter='<token.*>', is_lemmatized=True, lemma_tag='lemma', **args):
-        super().__init__(path, bos='<sentence.*>', eos='</sentence>',token_tag='token',token_delimiter='<token.*>', is_lemmatized=True, lemma_tag='lemma', **args)
+        super().__init__(path, bos, eos, token_tag, token_delimiter, is_lemmatized, lemma_tag, *args)
 
 
     # Function to get lemma if it exists
