@@ -12,7 +12,7 @@ import time
 from scipy.sparse import dok_matrix
 from gensim.models.word2vec import PathLineSentences
 from sklearn.utils.extmath import randomized_svd
-from sklearn.random_projection import sparse_random_matrix
+#from sklearn.random_projection import sparse_random_matrix
 from scipy.sparse import csr_matrix
 env = os.environ.copy()
 import logging
