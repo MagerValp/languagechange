@@ -140,7 +140,7 @@ class CountModel(StaticModel):
         self.format = 'npz'
         self.matrix_path = os.path.join(self.savepath)
 
-    def encode(self):
+    def encode(self, is_len = False):
         """
         Build a co-occurrence matrix from the corpus and save it to the specified path.
         """
@@ -190,9 +190,9 @@ class CountModel(StaticModel):
 
         outSpace = Space(matrix=cooc_mat_sparse, rows=vocabulary, columns=vocabulary)
 
-        #if is_len:
-        #    # L2-normalize vectors
-        #    outSpace.l2_normalize()
+        if is_len:
+            # L2-normalize vectors
+            outSpace.l2_normalize()
             
         # Save the matrix
         outSpace.save(self.savepath)
@@ -221,7 +221,7 @@ class PPMI(CountModel):
         self.matrix_path = os.path.join(self.savepath)
         self.align_strategies = {'OP', 'SRV', 'WI'}
 
-    def encode(self):
+    def encode(self, is_len = False):
         # Previously
         #subprocess.run(["python3", "-m", "LSCDetection.representations.ppmi", self.count_model.matrix_path, self.savepath, str(self.shifting_parameter), str(self.smoothing_parameter)])
 
@@ -259,9 +259,9 @@ class PPMI(CountModel):
             
         outSpace = Space(matrix=space.matrix, rows=space.rows, columns=space.columns)
 
-        #if is_len:
+        if is_len:
             # L2-normalize vectors
-        #    outSpace.l2_normalize()
+            outSpace.l2_normalize()
             
         # Save the matrix
         outSpace.save(self.savepath)
@@ -291,7 +291,7 @@ class SVD(StaticModel):
         self.format = 'w2v'
         self.align_strategies = {'OP', 'SRV', 'WI'}
 
-    def encode(self):
+    def encode(self, is_len = False):
         # Previously
         #subprocess.run(["python3", "-m", "LSCDetection.representations.svd", self.count_model.matrix_path, self.savepath, str(self.dimensionality), str(self.gamma)])
 
@@ -331,9 +331,9 @@ class SVD(StaticModel):
         
         outSpace = Space(matrix=matrix_reduced, rows=rows, columns=[])
 
-        #if is_len:
+        if is_len:
             # L2-normalize vectors
-        #    outSpace.l2_normalize()
+            outSpace.l2_normalize()
             
         # Save the matrix
         outSpace.save(self.savepath, format='w2v')
@@ -356,7 +356,7 @@ class RandomIndexing(StaticModel):
         self.align_strategies = {'OP', 'SRV', 'WI'}
         pass
 
-    def encode(self):
+    def encode(self, is_len = False):
         # Previously
         #subprocess.run(["python3", "-m", "LSCDetection.representations.ri", corpus.path, self.savepath, self.window_size])
 
@@ -381,9 +381,9 @@ class RandomIndexing(StaticModel):
         reducedMatrix = np.dot(countMatrix,randomMatrix)    
         outSpace = Space(matrix=reducedMatrix, rows=rows, columns=[])
         
-        #if is_len:
+        if is_len:
             # L2-normalize vectors
-        #    outSpace.l2_normalize()
+            outSpace.l2_normalize()
 
         # Save the matrix
         outSpace.save(self.savepath, format='w2v')
