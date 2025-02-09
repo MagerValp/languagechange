@@ -4,10 +4,14 @@ from collections import defaultdict
 from abc import ABC, abstractmethod
 from typing import Tuple, List, Union, Any
 from languagechange.usages import TargetUsage
+from languagechange.cache import CacheManager
 import transformers
 from transformers import AutoTokenizer, AutoModel
 from WordTransformer import WordTransformer, InputExample
 import logging
+import hashlib
+import pickle
+import os
 
 # Configure logging with a basic setup
 logging.basicConfig(
@@ -19,6 +23,20 @@ logger = logging.getLogger(__name__)
 
 # Suppress transformer logging
 transformers.logging.set_verbosity_error()
+
+def generate_cache_key(target_usages):
+    """
+    Generate a unique cache key based on the input data.
+    """
+    try:
+        if isinstance(target_usages, list):
+            data = [u.__dict__ if hasattr(u, '__dict__') else u for u in target_usages]
+        else:
+            data = target_usages.__dict__ if hasattr(target_usages, '__dict__') else target_usages
+        serialized = pickle.dumps(data)
+        return hashlib.sha256(serialized).hexdigest()
+    except Exception as e:
+        raise ValueError(f"Invalid input: {e}")
 
 class ContextualizedModel():
     """
@@ -33,6 +51,7 @@ class ContextualizedModel():
     def __init__(self,
                  device: str = 'cuda',
                  n_extra_tokens: int = 0,
+                 cache_dir="~/.cache/languagechange/contextualized",
                  *args, **kwargs):
         """
         Initialize the contextualized model.
@@ -55,6 +74,7 @@ class ContextualizedModel():
 
         self._n_extra_tokens = n_extra_tokens
         self._device = device
+        self.cache_mgr = CacheManager(cache_dir)
 
     @abstractmethod
     def encode(self, target_usages: Union[TargetUsage, List[TargetUsage]],
@@ -153,6 +173,15 @@ class XL_LEXEME(ContextualizedModel):
             np.array: Encoded embeddings.
         """
         
+        # Generate cache key
+        cache_key = generate_cache_key(target_usages)
+        cache_path = os.path.join(self.cache_mgr.cache_dir, f"xl_lexeme_{cache_key}.npy")
+        
+        # whether the cache files exist
+        if os.path.exists(cache_path):
+            logger.info(f"Loading cached embeddings from {cache_path}")
+            return np.load(cache_path, allow_pickle=True) 
+            
         logger.info("Encoding target usages with batch size: %d", batch_size)
         super(XL_LEXEME, self).encode(target_usages=target_usages, batch_size=batch_size)
         if isinstance(target_usages, TargetUsage):
@@ -166,6 +195,11 @@ class XL_LEXEME(ContextualizedModel):
             examples.append(InputExample(texts=target_usage.text(), positions=[start, end]))
 
         raw_embeddings = self._model.encode(examples, batch_size=batch_size, device=self._device)
+        
+        # save the embedding to file
+        with self.cache_mgr.atomic_write(cache_path) as temp_path:
+            np.save(temp_path, raw_embeddings)
+
         return raw_embeddings
 
 class BERT(ContextualizedModel):
@@ -357,6 +391,15 @@ class BERT(ContextualizedModel):
             np.array: Array of encoded embeddings.
         """
         
+        # Generate cache key
+        cache_key = generate_cache_key(target_usages)
+        cache_path = os.path.join(self.cache_mgr.cache_dir, f"bert_{cache_key}.npy")
+        
+        # whether the cache files exist
+        if os.path.exists(cache_path):
+            logger.info(f"Loading cached embeddings from {cache_path}")
+            return np.load(cache_path, allow_pickle=True) 
+            
         logger.info("Starting encoding process with batch size: %d", batch_size)
         super(BERT, self).encode(target_usages=target_usages, batch_size=batch_size)
 
@@ -370,6 +413,10 @@ class BERT(ContextualizedModel):
 
         raw_embeddings = np.concatenate(target_embeddings, axis=0)
 
+        # save the embedding to file
+        with self.cache_mgr.atomic_write(cache_path) as temp_path:
+            np.save(temp_path, raw_embeddings)
+            
         return raw_embeddings
 
 
