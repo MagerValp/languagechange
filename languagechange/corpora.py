@@ -8,6 +8,7 @@ from languagechange.utils import LiteralTime
 from sortedcontainers import SortedKeyList
 import logging
 from bs4 import BeautifulSoup
+import trankit
 
 logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
 
@@ -124,6 +125,41 @@ class Corpus:
 
             logging.info(f"{n_usages} usages found.")
         return usage_dictionary
+    
+
+    def tokenize(self, text, tokenizer = "trankit"):
+        if tokenizer == "trankit":
+            p = trankit.Pipeline(self.language)
+            tokenized = p.tokenize(text)
+            tokenized_sentences = []
+            for sentence in tokenized["sentences"]:
+                tokenized_sentences.append([token["text"] for token in sentence["tokens"]])
+            return tokenized_sentences
+        
+        elif callable(tokenizer):
+            try:
+                return tokenizer(text)
+            except:
+                logging.info(f"ERROR: Could not use tokenizer {tokenizer} directly as a function to tokenize.")
+
+        elif hasattr(tokenizer, "tokenize") and callable(getattr(tokenizer,"tokenize")):
+            try:
+                return tokenizer.tokenize(text)
+            except:
+                logging.info(f"ERROR: Could not use method 'tokenize' of {tokenizer} as a function to tokenize.")
+
+
+    def lemmatize(self, text, lemmatizer = "trankit"):
+        if lemmatizer == "trankit":
+            p = trankit.Pipeline(self.language)
+            lemmatized = p.lemmatize(text)
+            lemmatized_sentences = []
+            for sentence in lemmatized["sentences"]:
+                lemmatized_sentences.append([token["lemma"] for token in sentence["tokens"]])
+            return lemmatized_sentences
+        
+        else: #todo: add other lemmatizers
+            return None
 
 
     def folder_iterator(self, path):
