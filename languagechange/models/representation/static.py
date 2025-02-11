@@ -136,6 +136,9 @@ class CountModel(StaticModel):
         super(CountModel,self).__init__()
         self.corpus = corpus
         self.window_size = window_size
+        # make sure the path is ending with npz
+        if not savepath.endswith('.npz'):
+            savepath += '.npz'
         self.savepath = savepath
         self.format = 'npz'
         self.matrix_path = os.path.join(self.savepath)
@@ -151,9 +154,18 @@ class CountModel(StaticModel):
         # Code below from LSCDetection:
         """
         Make count-based vector space from corpus.
-        """
-        logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
-        logging.info(__file__.upper())
+        """ 
+        
+        # check the cache in the save path
+        if os.path.exists(self.savepath):
+            try:
+                logger.info(f"Loading cached count matrix from {self.savepath}")
+                self.load()
+                return
+            except Exception as e:
+                logger.error(f"Cache loading failed: {str(e)}, regenerating matrix...")
+                os.remove(self.savepath)
+                      
         start_time = time.time()
 
         # Build vocabulary
@@ -218,6 +230,7 @@ class PPMI(CountModel):
         self.shifting_parameter = shifting_parameter
         self.smoothing_parameter = smoothing_parameter
         self.savepath = savepath
+        # self.format ???
         self.matrix_path = os.path.join(self.savepath)
         self.align_strategies = {'OP', 'SRV', 'WI'}
 
@@ -232,6 +245,17 @@ class PPMI(CountModel):
         Omer Levy, Yoav Goldberg, and Ido Dagan. 2015. Improving distributional similarity with lessons learned from word embeddings. Trans. ACL, 3.
 
         """
+        
+        # check the cache in savepath
+        if os.path.exists(self.savepath):
+            try:
+                logger.info(f"Loading cached PPMI matrix from {self.savepath}")
+                self.load()
+                return
+            except Exception as e:
+                logger.error(f"Cache loading failed: {str(e)}, recomputing PPMI...")
+                os.remove(self.savepath)
+                
 
         logger.info("Starting PPMI encoding process")
         start_time = time.time()    
@@ -286,6 +310,9 @@ class SVD(StaticModel):
         self.count_model = count_model
         self.dimensionality = dimensionality
         self.gamma = gamma
+        # make sure the save path is end with .w2v
+        if not savepath.endswith('.w2v'):
+            savepath += '.w2v'
         self.savepath = savepath
         self.matrix_path = os.path.join(self.savepath)
         self.format = 'w2v'
@@ -303,6 +330,16 @@ class SVD(StaticModel):
 
         """
 
+        # check the cache file from savepath
+        if os.path.exists(self.savepath):
+            try:
+                logger.info(f"Loading cached SVD matrix from {self.savepath}")
+                self.load()
+                return
+            except Exception as e:
+                logger.error(f"Cache loading failed: {str(e)}, recomputing SVD decomposition...")
+                os.remove(self.savepath)
+                
         logger.info("Starting SVD encoding process")
         start_time = time.time()    
 
