@@ -179,8 +179,12 @@ class XL_LEXEME(ContextualizedModel):
         
         # whether the cache files exist
         if os.path.exists(cache_path):
-            logger.info(f"Loading cached embeddings from {cache_path}")
-            return np.load(cache_path, allow_pickle=True) 
+            try:
+                logger.info(f"Loading cached embeddings from {cache_path}")
+                return np.load(cache_path, allow_pickle=True)
+            except Exception as e:
+                logger.error(f"Cache loading failed: {str(e)}, deleting corrupted cache file...")
+                os.remove(cache_path) 
             
         logger.info("Encoding target usages with batch size: %d", batch_size)
         super(XL_LEXEME, self).encode(target_usages=target_usages, batch_size=batch_size)
@@ -397,8 +401,12 @@ class BERT(ContextualizedModel):
         
         # whether the cache files exist
         if os.path.exists(cache_path):
-            logger.info(f"Loading cached embeddings from {cache_path}")
-            return np.load(cache_path, allow_pickle=True) 
+            try:
+                logger.info(f"Loading cached embeddings from {cache_path}")
+                return np.load(cache_path, allow_pickle=True)
+            except Exception as e:
+                logger.error(f"Cache loading failed: {str(e)}, deleting corrupted cache file...")
+                os.remove(cache_path) 
             
         logger.info("Starting encoding process with batch size: %d", batch_size)
         super(BERT, self).encode(target_usages=target_usages, batch_size=batch_size)
