@@ -127,39 +127,51 @@ class Corpus:
         return usage_dictionary
     
 
-    def tokenize(self, text, tokenizer = "trankit"):
+    def tokenize(self, tokenizer = "trankit"):
         if tokenizer == "trankit":
             p = trankit.Pipeline(self.language)
-            tokenized = p.tokenize(text)
-            tokenized_sentences = []
-            for sentence in tokenized["sentences"]:
-                tokenized_sentences.append([token["text"] for token in sentence["tokens"]])
-            return tokenized_sentences
+
+            for line in self.line_iterator():
+                tokenized_sentence = p.tokenize(line.raw_text(), is_sent = True)
+                line._tokens = [token["text"] for token in tokenized_sentence["tokens"]]
+                yield line
         
+        if hasattr(tokenizer, "tokenize") and callable(getattr(tokenizer,"tokenize")):
+            try:
+                for line in self.line_iterator():
+                    line._tokens = tokenizer.tokenize(line.raw_text())
+                    yield line
+            except:
+                logging.info(f"ERROR: Could not use method 'tokenize' within {tokenizer} directly as a function to tokenize.")
+
         elif callable(tokenizer):
             try:
-                return tokenizer(text)
+                for line in self.line_iterator():
+                    line._tokens = tokenizer(line.raw_text())
+                    yield line
             except:
                 logging.info(f"ERROR: Could not use tokenizer {tokenizer} directly as a function to tokenize.")
 
-        elif hasattr(tokenizer, "tokenize") and callable(getattr(tokenizer,"tokenize")):
-            try:
-                return tokenizer.tokenize(text)
-            except:
-                logging.info(f"ERROR: Could not use method 'tokenize' of {tokenizer} as a function to tokenize.")
 
-
-    def lemmatize(self, text, lemmatizer = "trankit"):
+    def lemmatize(self, lemmatizer = "trankit"):
         if lemmatizer == "trankit":
             p = trankit.Pipeline(self.language)
-            lemmatized = p.lemmatize(text)
-            lemmatized_sentences = []
-            for sentence in lemmatized["sentences"]:
-                lemmatized_sentences.append([token["lemma"] for token in sentence["tokens"]])
-            return lemmatized_sentences
+
+            for line in self.line_iterator():
+                lemmatized_sentence = p.lemmatize(line.raw_text(), is_sent = True)
+                line._lemmas = [token["lemma"] for token in lemmatized_sentence["tokens"]]
+                yield line
         
         else: #todo: add other lemmatizers
             return None
+            
+
+    def parse_dependencies(self):
+        pass
+
+
+    def segment_sentences(self):
+        pass
 
 
     def folder_iterator(self, path):
