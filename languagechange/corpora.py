@@ -132,23 +132,29 @@ class Corpus:
             p = trankit.Pipeline(self.language)
 
             for line in self.line_iterator():
-                tokenized_sentence = p.tokenize(line.raw_text(), is_sent = True)
-                line._tokens = [token["text"] for token in tokenized_sentence["tokens"]]
-                yield line
+                text = line.raw_text()
+                if type(text) == str and len(text.strip()) > 0:
+                    tokenized_sentence = p.tokenize(text, is_sent = True)
+                    line._tokens = [token["text"] for token in tokenized_sentence["tokens"]]
+                    yield line
         
         if hasattr(tokenizer, "tokenize") and callable(getattr(tokenizer,"tokenize")):
             try:
                 for line in self.line_iterator():
-                    line._tokens = tokenizer.tokenize(line.raw_text())
-                    yield line
+                    text = line.raw_text()
+                    if type(text) == str and len(text.strip()) > 0:
+                        line._tokens = tokenizer.tokenize(text)
+                        yield line
             except:
                 logging.info(f"ERROR: Could not use method 'tokenize' within {tokenizer} directly as a function to tokenize.")
 
         elif callable(tokenizer):
             try:
                 for line in self.line_iterator():
-                    line._tokens = tokenizer(line.raw_text())
-                    yield line
+                    text = line.raw_text()
+                    if type(text) == str and len(text.strip()) > 0:
+                        line._tokens = tokenizer(text)
+                        yield line
             except:
                 logging.info(f"ERROR: Could not use tokenizer {tokenizer} directly as a function to tokenize.")
 
@@ -158,9 +164,11 @@ class Corpus:
             p = trankit.Pipeline(self.language)
 
             for line in self.line_iterator():
-                lemmatized_sentence = p.lemmatize(line.raw_text(), is_sent = True)
-                line._lemmas = [token["lemma"] for token in lemmatized_sentence["tokens"]]
-                yield line
+                text = line.raw_text()
+                if type(text) == str and len(text.strip()) > 0:
+                    lemmatized_sentence = p.lemmatize(text, is_sent = True)
+                    line._lemmas = [token["lemma"] for token in lemmatized_sentence["tokens"]]
+                    yield line
         
         else: #todo: add other lemmatizers
             return None
