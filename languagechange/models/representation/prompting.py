@@ -33,8 +33,8 @@ class PromptModel:
                     return(token['lemma'])
                 
         p = trankit.Pipeline("english")
-        lemmatized = p.lemmatize(" ".join(sentences))
-        lemmas = [get_lemma(lemmatized['sentences'][i], target_usages[i]) for i in range(2)]
+        lemmatized = [p.lemmatize(sentence, is_sent = True) for sentence in sentences]
+        lemmas = [get_lemma(lemmatized[i], target_usages[i]) for i in range(2)]
         
         if lemmas[0] != lemmas[1]:
             logging.info("Lemmas of the two words differ, are you sure they are the same?")
@@ -43,6 +43,7 @@ class PromptModel:
         prompt = prompt_template.format(lemma, sentences[0], sentences[1])
 
         logging.info(f"Prompt: {prompt}")
+        print(prompt)
         
         try:
             completion = self.client.chat.completions.create(
