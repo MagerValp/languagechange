@@ -2,14 +2,14 @@ from typing import Tuple, List, Union, Any
 from languagechange.usages import TargetUsage
 from openai import OpenAI
 import logging
-from languagechange.corpora import Corpus
 import re
+import trankit
 
 # Generative model, should be compatible both with ChatGPT and DeepInfra.
 class PromptModel:
-    def __init__(self, model_name : str, key, base_url : str = ''):
+    def __init__(self, model_name : str, key, base_url : str = None):
         self.model_name = model_name
-        if base_url == '':
+        if not base_url:
             self.client = OpenAI(api_key = key)
         else:
             self.client = OpenAI(api_key = key, base_url=base_url) # For DeepInfra use "https://api.deepinfra.com/v1/openai"
@@ -32,13 +32,17 @@ class PromptModel:
                 if token['span'] == tuple(usage.offsets):
                     return(token['lemma'])
                 
-        corpus = Corpus('none','english')
-        tokenized = corpus.tokenize(" ".join(sentences), lemmatize=True, return_all=True)
-        lemmas = [get_lemma(tokenized['sentences'][i], target_usages[i]) for i in range(2)]
-        assert lemmas[0] == lemmas[1]
+        p = trankit.Pipeline("english")
+        lemmatized = p.lemmatize(" ".join(sentences))
+        lemmas = [get_lemma(lemmatized['sentences'][i], target_usages[i]) for i in range(2)]
+        
+        if lemmas[0] != lemmas[1]:
+            logging.info("Lemmas of the two words differ, are you sure they are the same?")
         lemma = lemmas[0]
             
         prompt = prompt_template.format(lemma, sentences[0], sentences[1])
+
+        logging.info(f"Prompt: {prompt}")
         
         try:
             completion = self.client.chat.completions.create(
@@ -49,15 +53,15 @@ class PromptModel:
             ]
             )
 
-            response = completion.choices[0].message.content
+            message = completion.choices[0].message()
         except:
             logging.info("Could not run chat completion.")
             return None
 
         # Extract the numbers from the answer of the chat model
         numbers = []
-        for match in re.finditer('\s\d(\.\d+)?',response):
-            number = response[match.start():match.end()]
+        for match in re.finditer('\s\d(\.\d+)?',message):
+            number = message[match.start():match.end()]
             try:
                 if 0 <= float(number) <= 1:
                     numbers.append(float(number))

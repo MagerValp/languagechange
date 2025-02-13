@@ -169,17 +169,41 @@ class Corpus:
                     lemmatized_sentence = p.lemmatize(text, is_sent = True)
                     line._lemmas = [token["lemma"] for token in lemmatized_sentence["tokens"]]
                     yield line
+
+        # todo: add other lemmatizers if needed
         
-        else: #todo: add other lemmatizers
-            return None
+        if hasattr(lemmatizer, "lemmatize") and callable(getattr(lemmatizer,"lemmatize")):
+            try:
+                for line in self.line_iterator():
+                    text = line.raw_text()
+                    if type(text) == str and len(text.strip()) > 0:
+                        line._lemmas = lemmatizer.lemmatize(text)
+                        yield line
+            except:
+                logging.info(f"ERROR: Could not use method 'lemmatize' within {lemmatizer} directly as a function to lemmatize.")
+
+        elif callable(lemmatizer):
+            try:
+                for line in self.line_iterator():
+                    text = line.raw_text()
+                    if type(text) == str and len(text.strip()) > 0:
+                        line._lemmas = lemmatizer(text)
+                        yield line
+            except:
+                logging.info(f"ERROR: Could not use method {lemmatizer} directly as a function to lemmatize.")
             
 
     def parse_dependencies(self):
         pass
 
 
-    def segment_sentences(self):
-        pass
+    # preliminary function
+    def segment_sentences(self, doc : str, segmentizer = "trankit"):
+        if segmentizer == "trankit":
+            p = trankit.Pipeline(self.language)
+            sentences = p.ssplit(doc)
+            for sent in sentences["sentences"]:
+                yield Line(sent["text"])
 
 
     def folder_iterator(self, path):
