@@ -393,10 +393,19 @@ class XMLCorpus(Corpus):
         super().__init__(name, **args)
         self.path = path
 
-        self.is_lemmatized = is_lemmatized
         if lemma_tag:
             self.lemma_tag = lemma_tag
         else:
+            self.lemma_tag = ''
+
+        if is_lemmatized:
+            self.is_lemmatized = True
+            if lemma_tag != '':
+                self.lemma_tag = lemma_tag
+            else:
+                self.lemma_tag = 'lemma'
+        else:
+            self.is_lemmatized = False
             self.lemma_tag = ''
 
         self.bos_regex = re.compile(bos)
@@ -418,36 +427,37 @@ class XMLCorpus(Corpus):
         else:
             fnames = [self.path]
 
-        def get_data(line):
+        def get_data(tokens, lemmas = []):
             data = {}
-            data['raw_text'] = ' '.join(line)
-            if self.is_lemmatized:
-                data['lemmas'] = line
-            else:
-                data['tokens'] = line
+            data['raw_text'] = ' '.join(tokens)
+            if self.is_lemmatized and lemmas != []:
+                data['lemmas'] = lemmas
+            data['tokens'] = tokens
             return data
 
         for fname in fnames:
             if fname.endswith('.xml'):
                 with open(fname,'r') as f:
-                    line = []
+                    tokens = []
+                    lemmas = []
                     for xml_line in f:
                         # Beginning of sentence
                         if self.bos_regex.search(xml_line) != None:
-                            line = []
+                            tokens = []
+                            lemmas = []
                         # The line contains a token
                         if self.token_regex.search(xml_line) != None:
                             soup = BeautifulSoup(xml_line,'xml')
-                            # Extract either the lemma(s) or the token(s) on each line
-                            if self.is_lemmatized and self.lemma_tag != '':
-                                tokens = [self.get_special_token(t,self.lemma_tag) for t in soup.find_all(self.token_tag)]
-                            else:
-                                tokens = [t.get_text() for t in soup.find_all(self.token_tag)]
-                            line.extend(tokens)
+                            # Extract the token(s) and possibly the lemma(s) on each line
+                            if self.is_lemmatized:
+                                lemma = [self.get_special_token(t,self.lemma_tag) for t in soup.find_all(self.token_tag)]
+                                lemmas.extend(lemma)
+                            token = [t.get_text() for t in soup.find_all(self.token_tag)]
+                            tokens.extend(token)
 
                         # End of sentence
                         if self.eos_regex.search(xml_line) != None:
-                            data = get_data(line)
+                            data = get_data(tokens, lemmas)
                             yield Line(fname=fname, **data)
                         
 
