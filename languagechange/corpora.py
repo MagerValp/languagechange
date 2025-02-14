@@ -76,7 +76,7 @@ class Corpus:
                     offsets.append([fi.start()+s, fi.start()+s+len(word)])
                 return offsets
 
-        usage_dictionary = {}
+        usage_dictionary = {} # need to be saved in cache
 
         if strategy == 'REGEX':
 
