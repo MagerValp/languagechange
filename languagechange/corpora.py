@@ -7,8 +7,9 @@ import re
 from languagechange.utils import LiteralTime
 from sortedcontainers import SortedKeyList
 import logging
-from bs4 import BeautifulSoup
+import xml.etree.ElementTree as ET
 import trankit
+from typing import List
 
 logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
 
@@ -51,10 +52,11 @@ class Line:
 
 class Corpus:
 
-    def __init__(self, name, language=None, time=LiteralTime('no time specification'), **args):
+    def __init__(self, name, language=None, time=LiteralTime('no time specification'), skip_lines=0, **args):
         self.name = name
         self.language = language
         self.time = time
+        self.skip_lines = skip_lines
 
 
     def set_sentences_iterator(self, sentences):
@@ -191,19 +193,44 @@ class Corpus:
                         yield line
             except:
                 logging.info(f"ERROR: Could not use method {lemmatizer} directly as a function to lemmatize.")
-            
 
-    def parse_dependencies(self):
-        pass
+
+    # Not done yet
+    def tokenize_lemmatize(self, nlp_model="trankit"):
+        if nlp_model == "trankit":
+            p = trankit.Pipeline(self.language)
+
+            for line in self.line_iterator():
+                text = line.raw_text()
+                if type(text) == str and len(text.strip()) > 0:
+                    lemmatized_sentence = p.lemmatize(text, is_sent = True)
+                    line._lemmas = [token["lemma"] for token in lemmatized_sentence["tokens"]]
+                    line._tokens = [token["text"] for token in lemmatized_sentence["tokens"]]
+                    yield line
+            
+    
+    # Not done yet
+    def pos_tag(self, pos_tagger = "trankit"):
+        if pos_tagger == "trankit":
+            p = trankit.Pipeline(self.language)
+
+            for line in self.line_iterator():
+                text = line.raw_text()
+                if type(text) == str and len(text.strip()) > 0:
+                    pos_tagged = p.posdep(text, is_sent = True)
+                    line._pos = [token["upos"] for token in pos_tagged["tokens"]]
+                    yield line
 
 
     # preliminary function
-    def segment_sentences(self, doc : str, segmentizer = "trankit"):
+    def segment_sentences(self, segmentizer = "trankit"):
         if segmentizer == "trankit":
             p = trankit.Pipeline(self.language)
-            sentences = p.ssplit(doc)
-            for sent in sentences["sentences"]:
-                yield Line(sent["text"])
+
+            for line in self.line_iterator():
+                sentences = p.ssplit(line)
+                for sent in sentences["sentences"]:
+                    yield Line(sent["text"])
 
 
     def folder_iterator(self, path):
@@ -220,7 +247,7 @@ class Corpus:
         return fnames
 
 
-    def cast_to_Vertical(corpora, vertical_corpus):
+    def cast_to_vertical(corpora, vertical_corpus):
 
         line_iterators = [corpus.line_iterator() for corpus in corpora]
         iterate = True
@@ -229,7 +256,7 @@ class Corpus:
 
             while iterate:
                 lines = []
-                for iterator in line_iterator:
+                for iterator in line_iterators:
                     next_line = next(iterator)
                 if not next_line == None:
                     vertical_lines = []
@@ -251,8 +278,8 @@ class LinebyLineCorpus(Corpus):
 
     def __init__(self, path, **args):
         if not 'name' in args:
-            args.name = path
-        super().__init__(**args)
+            name = path
+        super().__init__(name,**args)
         self.path = path
 
         if 'is_sentence_tokenized' in args:
@@ -312,15 +339,17 @@ class LinebyLineCorpus(Corpus):
 
             if fname.endswith('.txt'):
                 with open(fname,'r') as f:
-                    for line in f:
-                        data = get_data(line)
-                        yield Line(fname=fname, **data)
+                    for i, line in enumerate(f):
+                        if i >= self.skip_lines:
+                            data = get_data(line)
+                            yield Line(fname=fname, **data)
 
             elif fname.endswith('.gz'):
                 with gzip.open(fname, mode="rt") as f:
-                    for line in f:
-                        data = get_data(line)
-                        yield Line(fname=fname, **data)
+                    for i, line in enumerate(f):
+                        if i >= self.skip_lines:
+                            data = get_data(line)
+                            yield Line(fname=fname, **data)
 
             else:
                 raise Exception('Format not recognized')
@@ -329,7 +358,7 @@ class LinebyLineCorpus(Corpus):
 class VerticalCorpus(Corpus):
 
     def __init__(self, path, sentence_separator='\n', field_separator='\t', field_map={'token':0, 'lemma':1, 'pos_tag':2}, **args):
-        self.super(**args)
+        super().__init__(name=path,**args)
         self.path = path
         self.sentence_separator = sentence_separator
         self.field_separator = field_separator
@@ -339,7 +368,7 @@ class VerticalCorpus(Corpus):
     def line_iterator(self):
         
         if os.path.isdir(self.path):
-            fnames = self.folder_iterator(path)
+            fnames = self.folder_iterator(self.path)
         else:
             fnames = [self.path]
 
@@ -353,7 +382,8 @@ class VerticalCorpus(Corpus):
                 lemma_text = [vertical_line[self.field_map['lemma']] for vertical_line in splitted_line]
                 data['lemmas'] = lemma_text
             if 'pos_tag' in self.field_map:
-                pos_text = [vertical_line[self.field_map['pos']] for vertical_line in splitted_line]     
+                pos_text = [vertical_line[self.field_map['pos_tag']] for vertical_line in splitted_line]    
+                # something is probably missing here 
             return data
 
         for fname in fnames:
@@ -387,7 +417,7 @@ class VerticalCorpus(Corpus):
 # Supports only tokenized corpora so far.
 class XMLCorpus(Corpus):
 
-    def __init__(self, path, bos='<sentence.*>', eos='</sentence>',token_tag='token',token_delimiter='<token.*>', is_lemmatized=False, lemma_tag=None, **args):
+    def __init__(self, path, sentence_tag='sentence',token_tag='token', is_lemmatized=False, lemma_tag=None, **args):
         if not 'name' in args:
             name = path
         super().__init__(name, **args)
@@ -408,17 +438,12 @@ class XMLCorpus(Corpus):
             self.is_lemmatized = False
             self.lemma_tag = ''
 
-        self.bos_regex = re.compile(bos)
-        self.eos_regex = re.compile(eos)
-        self.token_regex = re.compile(token_delimiter)
+        self.sentence_tag = sentence_tag
         self.token_tag = token_tag
 
-
-    def get_special_token(self, tag, special_tag):
-        content = tag.get(special_tag)
-        if content != None:
-            return content
-        return tag.get_text()
+    
+    def get_attribute(self, tag, attribute):
+        return tag.attrib[attribute]
 
 
     def line_iterator(self):
@@ -437,49 +462,73 @@ class XMLCorpus(Corpus):
 
         for fname in fnames:
             if fname.endswith('.xml'):
-                with open(fname,'r') as f:
-                    tokens = []
-                    lemmas = []
-                    for xml_line in f:
-                        # Beginning of sentence
-                        if self.bos_regex.search(xml_line) != None:
+                tokens = []
+                lemmas = []
+                parser = ET.iterparse(fname, events=('start','end'))
+                parser = iter(parser)
+                event, root = next(parser)
+                for event, elem in parser:
+                    if elem.tag == self.sentence_tag:
+                        if event == 'start':
                             tokens = []
                             lemmas = []
-                        # The line contains a token
-                        if self.token_regex.search(xml_line) != None:
-                            soup = BeautifulSoup(xml_line,'xml')
-                            # Extract the token(s) and possibly the lemma(s) on each line
-                            if self.is_lemmatized:
-                                lemma = [self.get_special_token(t,self.lemma_tag) for t in soup.find_all(self.token_tag)]
-                                lemmas.extend(lemma)
-                            token = [t.get_text() for t in soup.find_all(self.token_tag)]
-                            tokens.extend(token)
-
-                        # End of sentence
-                        if self.eos_regex.search(xml_line) != None:
+                        # If the sentence has ended, create a new Line object with its content
+                        elif event == 'end':
                             data = get_data(tokens, lemmas)
                             yield Line(fname=fname, **data)
-                        
+                            elem.clear()
+                    elif elem.tag == self.token_tag:
+                        if event == 'end':
+                            if self.is_lemmatized:
+                                lemma = self.get_attribute(elem, self.lemma_tag)
+                                lemmas.append(lemma)
+                            token = elem.text
+                            tokens.append(token)
+                            elem.clear()
+                     
 
             else:
                 raise Exception('Format not recognized')
+
+    
+    # Cast to a LineByLine corpus and save the result in the path specified in there
+    def cast_to_linebyline(self, linebyline_corpus : LinebyLineCorpus):
+        savepath = linebyline_corpus.path
+        if hasattr(linebyline_corpus, 'tokens_splitter'):
+            tokens_splitter = linebyline_corpus.tokens_splitter
+        else:
+            tokens_splitter = ' '
+        tokenized = linebyline_corpus.is_tokenized
+        lemmatized = linebyline_corpus.is_lemmatized
+        if lemmatized and not self.is_lemmatized:
+            logging.info('ERROR: cannot cast to lemmatized LinebyLineCorpus because this XMLCorpus is not lemmatized.')
+            return None
+        with open(savepath, 'w+') as f:
+            if lemmatized:
+                for line in self.line_iterator():
+                    f.write(tokens_splitter.join(line.lemmas())+'\n')  # cache needed here
+            elif tokenized:
+                for line in self.line_iterator():
+                    f.write(tokens_splitter.join(line.tokens())+'\n')  # cache needed here
+            else:
+                for line in self.line_iterator():
+                    f.write(line.raw_text()+'\n')  # cache needed here
 
 
 # A class for handling XML corpora specifically from spraakbanken.gu.se
 class SprakBankenCorpus(XMLCorpus):
 
-    def __init__(self, path, bos='<sentence.*>', eos='</sentence>',token_tag='token',token_delimiter='<token.*>', is_lemmatized=True, lemma_tag='lemma', **args):
-        super().__init__(path, bos, eos, token_tag, token_delimiter, is_lemmatized, lemma_tag, **args)
+    def __init__(self, path, sentence_tag='sentence',token_tag='token', is_lemmatized=True, lemma_tag='lemma', **args):
+        super().__init__(path, sentence_tag, token_tag, is_lemmatized, lemma_tag, **args)
 
-
-    # Function to get lemma if it exists
-    def get_special_token(self, tag, special_tag):
-        content = tag.get(special_tag)
+    
+    def get_attribute(self, tag, attribute):
+        content = tag.attrib[attribute]
         if content != None:
             content = content.strip("|").split("|")
             if content != ['']:
                 return content[0]
-        return tag.get_text()
+        return tag.text
 
 
 # todo: add ways to extract the year from corpora

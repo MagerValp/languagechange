@@ -12,7 +12,7 @@ import time
 from scipy.sparse import dok_matrix
 from gensim.models.word2vec import PathLineSentences
 from sklearn.utils.extmath import randomized_svd
-#from sklearn.random_projection import sparse_random_matrix
+from sklearn.random_projection import SparseRandomProjection
 from scipy.sparse import csr_matrix
 env = os.environ.copy()
 import logging
@@ -412,11 +412,12 @@ class RandomIndexing(StaticModel):
         columns = countSpace.columns
         
         # Generate random vectors
-        randomMatrix = csr_matrix(sparse_random_matrix(self.window_size,len(columns)).toarray().T)
+        #randomMatrix = csr_matrix(sparse_random_matrix(self.window_size,len(columns)).toarray().T)
 
-        logging.info("Multiplying matrices")
-        reducedMatrix = np.dot(countMatrix,randomMatrix)    
-        outSpace = Space(matrix=reducedMatrix, rows=rows, columns=[])
+        #logging.info("Multiplying matrices")
+        #reducedMatrix = np.dot(countMatrix,randomMatrix)  
+        randomMatrix = SparseRandomProjection(self.window_size).fit_transform(countMatrix)  
+        outSpace = Space(matrix=randomMatrix, rows=rows, columns=[])
         
         if is_len:
             # L2-normalize vectors
