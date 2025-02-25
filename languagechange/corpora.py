@@ -195,7 +195,6 @@ class Corpus:
                 logging.info(f"ERROR: Could not use method {lemmatizer} directly as a function to lemmatize.")
 
 
-    # Not done yet
     def tokenize_lemmatize(self, nlp_model="trankit"):
         if nlp_model == "trankit":
             p = trankit.Pipeline(self.language)
@@ -208,8 +207,7 @@ class Corpus:
                     line._tokens = [token["text"] for token in lemmatized_sentence["tokens"]]
                     yield line
             
-    
-    # Not done yet
+
     def pos_tag(self, pos_tagger = "trankit"):
         if pos_tagger == "trankit":
             p = trankit.Pipeline(self.language)
@@ -382,8 +380,7 @@ class VerticalCorpus(Corpus):
                 lemma_text = [vertical_line[self.field_map['lemma']] for vertical_line in splitted_line]
                 data['lemmas'] = lemma_text
             if 'pos_tag' in self.field_map:
-                pos_text = [vertical_line[self.field_map['pos_tag']] for vertical_line in splitted_line]    
-                # something is probably missing here 
+                pos_text = [vertical_line[self.field_map['pos_tag']] for vertical_line in splitted_line]     
             return data
 
         for fname in fnames:
@@ -474,9 +471,10 @@ class XMLCorpus(Corpus):
                             lemmas = []
                         # If the sentence has ended, create a new Line object with its content
                         elif event == 'end':
-                            data = get_data(tokens, lemmas)
-                            yield Line(fname=fname, **data)
-                            elem.clear()
+                            if tokens != []:
+                                data = get_data(tokens, lemmas)
+                                yield Line(fname=fname, **data)
+                                elem.clear()
                     elif elem.tag == self.token_tag:
                         if event == 'end':
                             if self.is_lemmatized:
@@ -513,6 +511,24 @@ class XMLCorpus(Corpus):
             else:
                 for line in self.line_iterator():
                     f.write(line.raw_text()+'\n')  # cache needed here
+
+
+    def cast_to_vertical(self, vertical_corpus : VerticalCorpus):
+        savepath = vertical_corpus.path
+        field_separator = vertical_corpus.field_separator
+        sentence_separator = vertical_corpus.sentence_separator
+        # We need to make sure that the line features (token, lemma, pos, etc.) come in the same order as in the field_map in the vertical_corpus
+        sorted_field_names = [key for (key, value) in sorted(vertical_corpus.field_map.items(), key = lambda x : x[1])]
+        
+        def get_line_feature(line, key):
+            field_name_to_line_feature = {'token': line.tokens, 'lemma': line.lemmas, 'pos_tag': line.pos_tags}
+            return field_name_to_line_feature[key]()
+        
+        with open(savepath,'w+') as f:
+            for line in self.line_iterator():
+                for t in zip(*(get_line_feature(line, key) for key in sorted_field_names)):
+                    f.write(field_separator.join(list(t))+'\n') # cache needed here
+                f.write(sentence_separator) # cache needed here
 
 
 # A class for handling XML corpora specifically from spraakbanken.gu.se
