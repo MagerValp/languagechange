@@ -162,7 +162,7 @@ class XL_LEXEME(ContextualizedModel):
 
     def encode(self, target_usages: Union[TargetUsage, List[TargetUsage]],
                batch_size: int = 8) -> np.array:
-        """
+        """ 
         Encode target usages with XL_LEXEME model.
 
         Args:
