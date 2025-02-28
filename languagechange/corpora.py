@@ -9,7 +9,7 @@ from sortedcontainers import SortedKeyList
 import logging
 import xml.etree.ElementTree as ET
 import trankit
-from typing import List
+from typing import List, Union, Self
 
 logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
 
@@ -270,6 +270,42 @@ class Corpus:
     def save(self):
         lc = LanguageChange()
         path = lc.save_resource('corpus',f'{self.language} corpora',self.name)
+
+
+    def save_tokenized_corpora(corpora : Union[Self, List[Self]], tokens = True, lemmas = False, pos_tags = False, save_format = 'linebyline', file_specification = None, file_ending = ".txt", tokenizer="trankit", lemmatizer="trankit", pos_tagger="trankit"):
+        if not type(corpora) is list:
+            corpora = [corpora]
+        if file_specification == None:
+            file_specification = ""
+            file_specification += "-tokens" if tokens else '' 
+            file_specification += '-lemmas' if lemmas else '' 
+            file_specification += '-pos_tags' if pos_tags else ''
+        for corpus in corpora:
+            tokenized_name = os.path.splitext(corpus.path)[0]+file_specification+file_ending
+            with open(tokenized_name, 'w+') as f:
+                if save_format == 'linebyline':
+                    if tokens:
+                        for line in corpus.tokenize(tokenizer):
+                            f.write(' '.join(line.tokens())+'\n') # cache needed here
+                    elif lemmas:
+                        for line in corpus.lemmatize(lemmatizer):
+                            f.write(' '.join(line.lemmas())+'\n') # cache needed here
+                    elif pos_tags:
+                        for line in corpus.pos_tagging(pos_tagger):
+                            f.write(' '.join(line.pos_tags())+'\n')
+                elif save_format == 'vertical':
+                    if tokens:
+                        if lemmas:
+                            for line in corpus.tokenize_lemmatize():
+                                for pair in zip(*(line.tokens(), line.lemmas())):
+                                    f.write('\t'.join(pair)+'\n') # cache needed here
+                                f.write('\n') # cache needed here
+                    elif tokens:
+                        for line in corpus.tokenize(tokenizer):
+                            f.write('\n'.join(line.tokens())+'\n') # cache needed here
+                    elif lemmas:
+                        for line in corpus.lemmatize(lemmatizer):
+                            f.write('\n'.join(line.lemmas())+'\n') # cache needed here
 
 
 class LinebyLineCorpus(Corpus):
