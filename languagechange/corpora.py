@@ -129,23 +129,44 @@ class Corpus:
         return usage_dictionary
     
 
-    def tokenize(self, tokenizer = "trankit"):
+    def tokenize(self, tokenizer = "trankit", split_sentences=False, batch_size=128):
         if tokenizer == "trankit":
             p = trankit.Pipeline(self.language)
 
-            for line in self.line_iterator():
-                text = line.raw_text()
-                if type(text) == str and len(text.strip()) > 0:
-                    tokenized_sentence = p.tokenize(text, is_sent = True)
-                    line._tokens = [token["text"] for token in tokenized_sentence["tokens"]]
-                    yield line
+            if split_sentences:
+
+                def process_lines(texts):
+                    tokenized = p.tokenize(' '.join(texts))
+                    for sentence in tokenized['sentences']:
+                        yield Line(raw_text=sentence['text'], tokens=[token['text'] for token in sentence['tokens']])
+
+                texts = []
+                for line in self.line_iterator():
+                    text = line.raw_text()
+                    if type(text) == str and len(text.strip()) > 0:
+                        texts.append(text)
+                    if len(texts) == batch_size:
+                        for line in process_lines(texts):
+                            yield line
+                        texts = []
+                if texts != []:
+                    for line in process_lines(texts):
+                        yield line  
+                        
+            else:
+                for line in self.line_iterator():
+                    text = line.raw_text()
+                    if type(text) == str and len(text.strip()) > 0:
+                        tokenized_sentence = p.tokenize(text, is_sent=True)
+                        line._tokens = [token['text'] for token in tokenized_sentence['tokens']]
+                        yield line
         
-        if hasattr(tokenizer, "tokenize") and callable(getattr(tokenizer,"tokenize")):
+        elif hasattr(tokenizer, "tokenize") and callable(getattr(tokenizer,"tokenize")):
             try:
                 for line in self.line_iterator():
                     text = line.raw_text()
                     if type(text) == str and len(text.strip()) > 0:
-                        line._tokens = tokenizer.tokenize(text)
+                        line._tokens = [str(token) for token in tokenizer.tokenize(text)]
                         yield line
             except:
                 logging.info(f"ERROR: Could not use method 'tokenize' within {tokenizer} directly as a function to tokenize.")
@@ -155,22 +176,72 @@ class Corpus:
                 for line in self.line_iterator():
                     text = line.raw_text()
                     if type(text) == str and len(text.strip()) > 0:
-                        line._tokens = tokenizer(text)
+                        line._tokens = [str(token) for token in tokenizer(text)]
                         yield line
             except:
                 logging.info(f"ERROR: Could not use tokenizer {tokenizer} directly as a function to tokenize.")
 
 
-    def lemmatize(self, lemmatizer = "trankit"):
+    def lemmatize(self, lemmatizer = "trankit", pretokenized = False, tokenize = False, split_sentences = False, batch_size=128):
         if lemmatizer == "trankit":
             p = trankit.Pipeline(self.language)
 
-            for line in self.line_iterator():
-                text = line.raw_text()
-                if type(text) == str and len(text.strip()) > 0:
-                    lemmatized_sentence = p.lemmatize(text, is_sent = True)
-                    line._lemmas = [token["lemma"] for token in lemmatized_sentence["tokens"]]
-                    yield line
+            # input which is not sentence split
+            if split_sentences:
+                
+                def process_texts(texts):
+                    lemmatized = p.lemmatize(' '.join(texts))
+                    lines = []
+                    for sentence in lemmatized['sentences']:
+                        lines.append(Line(raw_text=sentence['text'], lemmas=[token['lemma'] for token in sentence['tokens']], tokens=[token['text'] for token in sentence['tokens']] if tokenize else None))
+                    return lines
+
+                texts = []
+                for line in self.line_iterator():
+                    text = line.raw_text()
+                    if type(text) == str and len(text.strip()) > 0:
+                        texts.append(text)
+                    if len(texts) == batch_size:
+                        for line in process_texts(texts):
+                            yield line
+                        texts = []
+
+                if texts != []:
+                    for line in process_texts(texts):
+                        yield line
+
+            # input which is not pretokenized, but each line is its own sentence
+            elif not pretokenized:
+                for line in self.line_iterator():
+                    text = line.raw_text()
+                    if type(text) == str and len(text.strip()) > 0:
+                        lemmatized_sentence = p.lemmatize(text, is_sent = True)
+                        line._lemmas = [token['lemma'] for token in lemmatized_sentence['tokens']]
+                        yield line
+
+            # pretokenized input, one or more sentences at a time
+            else:
+
+                def modify_lines(lines):
+                    lemmatized = p.lemmatize([line.tokens() for line in lines])
+                    lemmatized_sentences = lemmatized['sentences']
+                    for i, line in enumerate(lines):
+                        line._lemmas = [token['lemma'] for token in lemmatized_sentences[i]['tokens']]
+                        yield line
+
+                lines = []
+                for line in self.line_iterator():
+                    tokens = line.tokens()
+                    if type(tokens) == list and len(tokens) > 0:
+                        lines.append(line)
+                    if len(lines) == batch_size:
+                        for line in modify_lines(lines):
+                            yield line
+                        lines = []
+                if lines != []:
+                    for line in modify_lines(lines):
+                        yield line
+                        
 
         # todo: add other lemmatizers if needed
         
@@ -179,7 +250,7 @@ class Corpus:
                 for line in self.line_iterator():
                     text = line.raw_text()
                     if type(text) == str and len(text.strip()) > 0:
-                        line._lemmas = lemmatizer.lemmatize(text)
+                        line._lemmas = [str(lemma) for lemma in lemmatizer.lemmatize(text)]
                         yield line
             except:
                 logging.info(f"ERROR: Could not use method 'lemmatize' within {lemmatizer} directly as a function to lemmatize.")
@@ -189,46 +260,150 @@ class Corpus:
                 for line in self.line_iterator():
                     text = line.raw_text()
                     if type(text) == str and len(text.strip()) > 0:
-                        line._lemmas = lemmatizer(text)
+                        line._lemmas = [str(lemma) for lemma in lemmatizer(text)]
                         yield line
             except:
                 logging.info(f"ERROR: Could not use method {lemmatizer} directly as a function to lemmatize.")
+    
 
-
-    def tokenize_lemmatize(self, nlp_model="trankit"):
-        if nlp_model == "trankit":
-            p = trankit.Pipeline(self.language)
-
-            for line in self.line_iterator():
-                text = line.raw_text()
-                if type(text) == str and len(text.strip()) > 0:
-                    lemmatized_sentence = p.lemmatize(text, is_sent = True)
-                    line._lemmas = [token["lemma"] for token in lemmatized_sentence["tokens"]]
-                    line._tokens = [token["text"] for token in lemmatized_sentence["tokens"]]
-                    yield line
-            
-
-    def pos_tag(self, pos_tagger = "trankit"):
+    def pos_tagging(self, pos_tagger = "trankit", pretokenized = False, tokenize=False, split_sentences = False, batch_size=128):
         if pos_tagger == "trankit":
             p = trankit.Pipeline(self.language)
 
-            for line in self.line_iterator():
-                text = line.raw_text()
-                if type(text) == str and len(text.strip()) > 0:
-                    pos_tagged = p.posdep(text, is_sent = True)
-                    line._pos = [token["upos"] for token in pos_tagged["tokens"]]
-                    yield line
+            # input which is not sentence split
+            if split_sentences:
+
+                def process_texts(texts):
+                    pos_tagged = p.posdep(' '.join(texts))
+                    for sentence in pos_tagged['sentences']:
+                        yield Line(raw_text=sentence['text'], pos_tags=[token['upos'] for token in sentence['tokens']], tokens=[token['text'] for token in sentence['tokens']] if tokenize else None)
+
+                texts = []
+                for line in self.line_iterator():
+                    text = line.raw_text()
+                    if type(text) == str and len(text.strip()) > 0:
+                        texts.append(text)
+                    if len(texts) == batch_size:
+                        for line in process_texts(texts):
+                            yield line
+                        texts = []
+
+                if texts != []:
+                    for line in process_texts(texts):
+                        yield line
+
+            # input which is not pretokenized, but each line is its own sentence
+            elif not pretokenized:
+                for line in self.line_iterator():
+                    text = line.raw_text()
+                    if type(text) == str and len(text.strip()) > 0:
+                        pos_tagged_sentence = p.posdep(text, is_sent = True)
+                        line._pos_tags = [token['upos'] for token in pos_tagged_sentence['tokens']]
+                        if tokenize:
+                            line._tokens = [token['text'] for token in pos_tagged_sentence['tokens']]
+                        yield line
+
+            # pretokenized input, one or more sentences at a time
+            else:
+
+                def modify_lines(lines):
+                    pos_tagged = p.posdep([line.tokens() for line in lines])
+                    pos_tagged_sentences = pos_tagged['sentences']
+                    for i, line in enumerate(lines):
+                        line._pos_tags = [token['upos'] for token in pos_tagged_sentences[i]['tokens']]
+                        if tokenize:
+                            line._tokens = [token['text'] for token in pos_tagged_sentences[i]['tokens']]
+                        yield line
+
+                lines = []
+                for line in self.line_iterator():
+                    tokens = line.tokens()
+                    if type(tokens) == list and len(tokens) > 0:
+                        lines.append(line)
+                    if len(lines) == batch_size:
+                        for line in modify_lines(lines):
+                            yield line
+                        lines = []
+                        
+                if lines != []:
+                    for line in modify_lines(lines):
+                        yield line
+
+
+    def tokens_lemmas_pos_tags(self, nlp_model="trankit", split_sentences = False, batch_size=128):
+        if nlp_model == "trankit":
+            p = trankit.Pipeline(self.language)
+
+            if not split_sentences:
+                for line in self.line_iterator():
+                    text = line.raw_text()
+                    if type(text) == str and len(text.strip()) > 0:
+                        lemmatized_sentence = p.lemmatize(text, is_sent = True)
+                        line._lemmas = [token['lemma'] for token in lemmatized_sentence['tokens']]
+                        line._tokens = [token['text'] for token in lemmatized_sentence['tokens']]
+                        pos_tagged = p.posdep(line.tokens(), is_sent=True)
+                        line._pos_tags = [token['upos'] for token in pos_tagged['tokens']]
+                        yield line
+
+            else:
+
+                def process_texts(texts):
+                    lemmatized_sentences = p.lemmatize(' '.join(texts))
+                    tokens = []
+                    for sentence in lemmatized_sentences['sentences']:
+                        tokens.append([token['text'] for token in sentence['tokens']])
+                    pos_tagged_sentences = p.posdep(tokens)
+                    for i, sentence in enumerate(lemmatized_sentences['sentences']):
+                        yield Line(raw_text=sentence['text'], tokens=[token['text'] for token in sentence['tokens']], lemmas=[token['lemma'] for token in sentence['tokens']],pos_tags=[token['upos'] for token in pos_tagged_sentences['sentences'][i]['tokens']])
+
+                texts = []
+                for line in self.line_iterator():
+                    text = line.raw_text()
+                    if type(text) == str and len(text.strip()) > 0:
+                        texts.append(text)
+                    if len(texts) == batch_size:
+                        for line in process_texts(texts):
+                            yield line
+                        texts = []
+                if len(texts) != 0:
+                    for line in process_texts(texts):
+                        yield line
 
 
     # preliminary function
-    def segment_sentences(self, segmentizer = "trankit"):
+    def segment_sentences(self, segmentizer = "trankit", batch_size=128):
         if segmentizer == "trankit":
             p = trankit.Pipeline(self.language)
 
+            lines = []
             for line in self.line_iterator():
-                sentences = p.ssplit(line)
-                for sent in sentences["sentences"]:
-                    yield Line(sent["text"])
+                lines.append(line.raw_text())
+                if len(lines) == batch_size:
+                    sentences = p.ssplit(' '.join(lines))
+                    for sent in sentences['sentences']:
+                        yield Line(sent['text'])
+                    lines = []
+            if len(lines) != 0:
+                sentences = p.ssplit(' '.join(lines))
+                for sent in sentences['sentences']:
+                    yield Line(sent['text'])
+
+        elif callable(segmentizer):
+            try:
+                lines = []
+                for line in self.line_iterator():
+                    lines.append(line.raw_text())
+                    if len(lines) == batch_size:
+                        sentences = segmentizer(' '.join(lines))
+                        for sent in sentences:
+                            yield Line(sent)
+                        lines = []
+                if len(lines) != 0:
+                    sentences = segmentizer(' '.join(lines))
+                    for sent in sentences:
+                        yield Line(sent)
+            except:
+                logging.info(f"ERROR: Could not use method {segmentizer} directly as a function to split sentences.")
 
 
     def folder_iterator(self, path):
