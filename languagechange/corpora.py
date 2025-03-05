@@ -4,12 +4,13 @@ import random
 from languagechange.resource_manager import LanguageChange
 from languagechange.usages import Target, TargetUsage, TargetUsageList
 import re
-from languagechange.utils import LiteralTime
+from languagechange.utils import LiteralTime, NumericalTime, TimeInterval
 from sortedcontainers import SortedKeyList
 import logging
-import xml.etree.ElementTree as ET
+import lxml.etree as ET
 import trankit
 from typing import List, Union, Self
+import datetime
 
 logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
 
@@ -599,23 +600,25 @@ class VerticalCorpus(Corpus):
             if fname.endswith('.txt'):
                 with open(fname,'r') as f:
                     line = []
-                    for vertical_line in f:
-                        if vertical_line == self.sentence_separator:
-                            data = get_data(line)
-                            yield Line(fname=fname, **data)
-                            line = []
-                        else:
-                            line.append(vertical_line)
+                    for i, vertical_line in enumerate(f):
+                        if i >= self.skip_lines:
+                            if vertical_line == self.sentence_separator:
+                                data = get_data(line)
+                                yield Line(fname=fname, **data)
+                                line = []
+                            else:
+                                line.append(vertical_line)
 
             elif fname.endswith('.gz'):
                 with gzip.open(fname, mode="rt") as f:
-                    for vertical_line in f:
-                        if vertical_line == self.sentence_separator:
-                            data = get_data(line)
-                            yield Line(fname=fname, **data)
-                            line = []
-                        else:
-                            line.append(vertical_line)
+                    for i, vertical_line in enumerate(f):
+                        if i >= self.skip_lines:
+                            if vertical_line == self.sentence_separator:
+                                data = get_data(line)
+                                yield Line(fname=fname, **data)
+                                line = []
+                            else:
+                                line.append(vertical_line)
 
             else:
                 raise Exception('Format not recognized')
@@ -676,24 +679,25 @@ class XMLCorpus(Corpus):
                 parser = iter(parser)
                 event, root = next(parser)
                 for event, elem in parser:
-                    if elem.tag == self.sentence_tag:
-                        if event == 'start':
-                            tokens = []
-                            lemmas = []
-                        # If the sentence has ended, create a new Line object with its content
-                        elif event == 'end':
-                            if tokens != []:
-                                data = get_data(tokens, lemmas)
-                                yield Line(fname=fname, **data)
+                    if elem.sourceline >= self.skip_lines:
+                        if elem.tag == self.sentence_tag:
+                            if event == 'start':
+                                tokens = []
+                                lemmas = []
+                            # If the sentence has ended, create a new Line object with its content
+                            elif event == 'end':
+                                if tokens != []:
+                                    data = get_data(tokens, lemmas)
+                                    yield Line(fname=fname, **data)
+                                    elem.clear()
+                        elif elem.tag == self.token_tag:
+                            if event == 'end':
+                                if self.is_lemmatized:
+                                    lemma = self.get_attribute(elem, self.lemma_tag)
+                                    lemmas.append(lemma)
+                                token = elem.text
+                                tokens.append(token)
                                 elem.clear()
-                    elif elem.tag == self.token_tag:
-                        if event == 'end':
-                            if self.is_lemmatized:
-                                lemma = self.get_attribute(elem, self.lemma_tag)
-                                lemmas.append(lemma)
-                            token = elem.text
-                            tokens.append(token)
-                            elem.clear()
                      
 
             else:
