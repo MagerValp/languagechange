@@ -49,7 +49,7 @@ class LlamaDefinitionGenerator:
             max_time: Max time in seconds per batch (default is 4.5).
             
         Example:
-            gen = DefinitionGenerator("meta-llama/Llama-2-7b-chat-hf", 
+            gen = LlamaDefinitionGenerator("meta-llama/Llama-2-7b-chat-hf", 
                                        "FrancescoPeriti/Llama2Dictionary", 
                                        "hf_token", "testdata.json")
         """
@@ -65,10 +65,11 @@ class LlamaDefinitionGenerator:
 
         # Load the base model with explicit settings
         chat_model = AutoModelForCausalLM.from_pretrained(
-            self.model_name,
-            device_map=None,  # Disable auto device mapping
-            torch_dtype=torch.float16  # Use FP16 for memory efficiency
-        )
+                    self.model_name,
+                    device_map="auto",
+                    torch_dtype=torch.float16,  # Use FP16 for memory efficiency
+                    low_cpu_mem_usage=True
+                ).to('cuda')
         self.model = PeftModel.from_pretrained(chat_model, self.ft_model_name)
         self.model.eval()
 
@@ -101,9 +102,9 @@ class LlamaDefinitionGenerator:
                 examples = json.load(f)
             self.dataset = Dataset.from_list(examples)
         except FileNotFoundError:
-            raise FileNotFoundError(f"Test data file not found: {self.testdata_path}")
+            raise FileNotFoundError(f"Couldn’t find the test data file at: {self.testdata_path}")
         except json.JSONDecodeError:
-            raise json.JSONDecodeError(f"Invalid JSON format in file: {self.testdata_path}")
+            raise json.JSONDecodeError(f"The JSON file at {self.testdata_path} isn’t valid.")
 
     def apply_chat_template(self):
         """
@@ -183,6 +184,9 @@ class LlamaDefinitionGenerator:
         """
         sense_definitions = []
         device = next(self.model.parameters()).device  # Get model's device
+        
+        print(f"Using generation device: {device}")
+        print(f"EOS tokens: {self.eos_tokens}")
 
         with torch.no_grad():
             for i in range(0, len(self.tokenized_dataset), self.batch_size):
@@ -204,7 +208,7 @@ class LlamaDefinitionGenerator:
                         forced_eos_token_id=self.eos_tokens,
                         max_time=self.max_time * self.batch_size,
                         eos_token_id=self.eos_tokens,
-                        temperature=0.00001,
+                        temperature=0.7,
                         pad_token_id=self.tokenizer.eos_token_id
                     )
                     answers = self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)
@@ -221,6 +225,8 @@ class LlamaDefinitionGenerator:
                              f"doesn't match dataset size ({len(self.dataset)})")
 
         self.dataset = self.dataset.add_column('definition', sense_definitions)
+    
+    
 
     def print_results(self):
         """
