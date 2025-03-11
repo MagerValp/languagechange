@@ -18,7 +18,7 @@ class SCDURel(BaseModel):
 
 
 class PromptModel:
-    def __init__(self, model_name : str, model_provider : str, langsmith_key : str = None, provider_key : str = None, scale="float"):
+    def __init__(self, model_name : str, model_provider : str, langsmith_key : str = None, provider_key_name : str = None, provider_key : str = None, scale="float"):
         self.model_name = model_name
 
         os.environ["LANGSMITH_TRACING"] = "true"
@@ -29,7 +29,8 @@ class PromptModel:
         elif not os.environ.get("LANGSMITH_API_KEY"):
             os.environ["LANGSMITH_API_KEY"] = getpass.getpass("Enter API key for LangSmith: ")
 
-        provider_key_name = {'openai':"OPENAI_API_KEY", "groq":"GROQ_API_KEY"}[model_provider]
+        if provider_key_name is None:
+            provider_key_name = {'openai':"OPENAI_API_KEY", "groq":"GROQ_API_KEY"}[model_provider] # add more providers
         if provider_key != None:
             os.environ[provider_key_name] = provider_key
         elif not os.environ.get(provider_key_name):
@@ -41,7 +42,6 @@ class PromptModel:
             self.structure = SCFloat
         elif scale == "DURel":
             self.structure = SCDURel
-        # Todo: add support for custom measurements
         else:
             self.structure = None
 
@@ -52,9 +52,9 @@ class PromptModel:
 
 
     def get_response(self, target_usages : List[TargetUsage], 
-                     system_message : str = 'You are a lexicographer',
-                     user_prompt_template : str = 'Please provide a number measuring how different the meaning of the word \'{target}\' is between the following example sentences: \n1. {usage_1}\n2. {usage_2}',
-                     lemmatize : bool = True):
+                     system_message = 'You are a lexicographer',
+                     user_prompt_template = 'Please provide a number measuring how different the meaning of the word \'{target}\' is between the following example sentences: \n1. {usage_1}\n2. {usage_2}',
+                     lemmatize = True):
         
         assert len(target_usages) == 2
 
@@ -93,8 +93,6 @@ class PromptModel:
             return None
         
         try:
-            # Structured output
             return response.change
         except:
-            # Non-structured output
             return response
