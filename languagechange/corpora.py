@@ -331,7 +331,7 @@ class Corpus:
                         yield line
 
 
-    def tokens_lemmas_pos_tags(self, nlp_model="trankit", split_sentences = False, batch_size=128):
+    def tokens_lemmas_pos_tags(self, nlp_model="trankit", tokens=True, split_sentences = False, batch_size=128):
         if nlp_model == "trankit":
             p = trankit.Pipeline(self.language)
 
@@ -341,7 +341,8 @@ class Corpus:
                     if type(text) == str and len(text.strip()) > 0:
                         lemmatized_sentence = p.lemmatize(text, is_sent = True)
                         line._lemmas = [token['lemma'] for token in lemmatized_sentence['tokens']]
-                        line._tokens = [token['text'] for token in lemmatized_sentence['tokens']]
+                        if tokens:
+                            line._tokens = [token['text'] for token in lemmatized_sentence['tokens']]
                         pos_tagged = p.posdep(line.tokens(), is_sent=True)
                         line._pos_tags = [token['upos'] for token in pos_tagged['tokens']]
                         yield line
@@ -355,7 +356,7 @@ class Corpus:
                         tokens.append([token['text'] for token in sentence['tokens']])
                     pos_tagged_sentences = p.posdep(tokens)
                     for i, sentence in enumerate(lemmatized_sentences['sentences']):
-                        yield Line(raw_text=sentence['text'], tokens=[token['text'] for token in sentence['tokens']], lemmas=[token['lemma'] for token in sentence['tokens']],pos_tags=[token['upos'] for token in pos_tagged_sentences['sentences'][i]['tokens']])
+                        yield Line(raw_text=sentence['text'], tokens=[token['text'] for token in sentence['tokens']] if tokens else None, lemmas=[token['lemma'] for token in sentence['tokens']],pos_tags=[token['upos'] for token in pos_tagged_sentences['sentences'][i]['tokens']])
 
                 texts = []
                 for line in self.line_iterator():
