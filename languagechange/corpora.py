@@ -448,40 +448,62 @@ class Corpus:
         path = lc.save_resource('corpus',f'{self.language} corpora',self.name)
 
 
-    def save_tokenized_corpora(corpora : Union[Self, List[Self]], tokens = True, lemmas = False, pos_tags = False, save_format = 'linebyline', file_specification = None, file_ending = ".txt", tokenizer="trankit", lemmatizer="trankit", pos_tagger="trankit"):
+    def save_tokenized_corpora(corpora : Union[Self, List[Self]], tokens = True, lemmas = False, pos = False, save_format = 'linebyline', file_specification = None, file_ending = ".txt", tokenizer="trankit", lemmatizer="trankit", pos_tagger="trankit", split_sentences = True, batch_size=128):
         if not type(corpora) is list:
             corpora = [corpora]
         if file_specification == None:
             file_specification = ""
             file_specification += "-tokens" if tokens else '' 
             file_specification += '-lemmas' if lemmas else '' 
-            file_specification += '-pos_tags' if pos_tags else ''
+            file_specification += '-pos' if pos else ''
         for corpus in corpora:
             tokenized_name = os.path.splitext(corpus.path)[0]+file_specification+file_ending
-            with open(tokenized_name, 'w+') as f:
+            with open(tokenized_name, 'w+') as f: # cache is probably needed here because the file might already exist.
                 if save_format == 'linebyline':
                     if tokens:
-                        for line in corpus.tokenize(tokenizer):
-                            f.write(' '.join(line.tokens())+'\n') # cache needed here
+                        for line in corpus.tokenize(tokenizer, split_sentences=split_sentences, batch_size=batch_size):
+                            f.write(' '.join(line.tokens())+'\n') 
                     elif lemmas:
-                        for line in corpus.lemmatize(lemmatizer):
-                            f.write(' '.join(line.lemmas())+'\n') # cache needed here
-                    elif pos_tags:
-                        for line in corpus.pos_tagging(pos_tagger):
+                        for line in corpus.lemmatize(lemmatizer, split_sentences=split_sentences, batch_size=batch_size):
+                            f.write(' '.join(line.lemmas())+'\n') 
+                    elif pos:
+                        for line in corpus.pos_tagging(pos_tagger,split_sentences=split_sentences, batch_size=batch_size):
                             f.write(' '.join(line.pos_tags())+'\n')
                 elif save_format == 'vertical':
-                    if tokens:
-                        if lemmas:
-                            for line in corpus.tokenize_lemmatize():
-                                for pair in zip(*(line.tokens(), line.lemmas())):
-                                    f.write('\t'.join(pair)+'\n') # cache needed here
-                                f.write('\n') # cache needed here
+                    if lemmas:
+                        if pos:
+                            # tokens_lemmas_pos (with or without tokens)
+                            for line in corpus.tokens_lemmas_pos_tags(tokenizer, tokens=tokens,split_sentences=split_sentences, batch_size=batch_size):
+                                if tokens:
+                                    for triple in zip(*(line.tokens(), line.lemmas(), line.pos_tags())):
+                                        f.write('\t'.join(triple)+'\n') 
+                                else:
+                                    for pair in zip(*(line.lemmas(), line.pos_tags())):
+                                        f.write('\t'.join(pair)+'\n')
+                                f.write('\n')
+                        else:
+                            # lemmatize (with or without tokens)
+                            for line in corpus.lemmatize(tokenizer, tokenize=tokens,split_sentences=split_sentences, batch_size=batch_size):
+                                if tokens:
+                                    for pair in zip(*(line.tokens(), line.lemmas())):
+                                        f.write('\t'.join(pair)+'\n')
+                                else:
+                                    f.write('\n'.join(line.lemmas()))
+                                f.write('\n') 
+
+                    elif pos:
+                        # pos_tagging (with or without tokens)
+                        for line in corpus.pos_tagging(tokenizer, tokenize=tokens, split_sentences=split_sentences, batch_size=batch_size):
+                            if tokens:
+                                for pair in zip(*(line.tokens(), line.pos_tags())):
+                                    f.write('\t'.join(pair)+'\n')
+                            else:
+                                f.write('\n'.join(line.pos_tags()))
+                            f.write('\n')
                     elif tokens:
-                        for line in corpus.tokenize(tokenizer):
-                            f.write('\n'.join(line.tokens())+'\n') # cache needed here
-                    elif lemmas:
-                        for line in corpus.lemmatize(lemmatizer):
-                            f.write('\n'.join(line.lemmas())+'\n') # cache needed here
+                        # tokenize only
+                        for line in corpus.tokenize(tokenizer,split_sentences=split_sentences, batch_size=batch_size):
+                            f.write('\n'.join(line.tokens())+'\n')
 
 
 class LinebyLineCorpus(Corpus):
