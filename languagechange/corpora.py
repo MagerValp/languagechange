@@ -343,7 +343,9 @@ class Corpus:
                         line._lemmas = [token['lemma'] for token in lemmatized_sentence['tokens']]
                         if tokens:
                             line._tokens = [token['text'] for token in lemmatized_sentence['tokens']]
-                        pos_tagged = p.posdep(line.tokens(), is_sent=True)
+                            pos_tagged = p.posdep(line.tokens(), is_sent=True)
+                        else:
+                            pos_tagged = p.posdep(line.raw_text(), is_sent=True)
                         line._pos_tags = [token['upos'] for token in pos_tagged['tokens']]
                         yield line
 
@@ -615,7 +617,8 @@ class VerticalCorpus(Corpus):
                 lemma_text = [vertical_line[self.field_map['lemma']] for vertical_line in splitted_line]
                 data['lemmas'] = lemma_text
             if 'pos_tag' in self.field_map:
-                pos_text = [vertical_line[self.field_map['pos_tag']] for vertical_line in splitted_line]     
+                pos_text = [vertical_line[self.field_map['pos_tag']] for vertical_line in splitted_line]   
+                data['pos_tags'] = pos_text
             return data
 
         for fname in fnames:
