@@ -3,8 +3,9 @@ import json
 import argparse
 from datasets import Dataset
 from typing import Literal, Sequence, TypedDict
-import openai
 import time
+from typing_extensions import Annotated
+from langchain_openai import ChatOpenAI
 
 # Define types for chat messages
 Role = Literal["system", "user"]
@@ -15,12 +16,16 @@ class Message(TypedDict):
 
 Dialog = Sequence[Message]
 
+# Structured output schema for word definitions
+class WordDefinition(TypedDict):
+    definition: Annotated[str, ..., "A concise definition generated from the example sentence"]
+
 class ChatGPTDefinitionGenerator:
     """
     A simple tool to make short definitions for words using ChatGPT, based on example sentences.
 
     Attributes:
-        openai_api_key (str): Your OpenAI API key.
+        openai_api_key (str): OpenAI API key.
         testdata_path (str): The path to the JSON file with test data.
         batch_size (int): How many examples to process at one time.
         request_delay (float): Time to wait between API requests (in seconds).
@@ -31,10 +36,10 @@ class ChatGPTDefinitionGenerator:
     def __init__(self, openai_api_key: str, testdata_path: str, batch_size: int = 32, 
                  request_delay: float = 1.0, model: str = "gpt-3.5-turbo"):
         """
-        Sets up the tool with your API key and data details.
+        Sets up the tool with API key and data details.
 
         Args:
-            openai_api_key: Your OpenAI API key.
+            openai_api_key: OpenAI API key.
             testdata_path: The path to the JSON file with examples.
             batch_size: Number of examples to process at once (default is 32).
             request_delay: Time to wait between requests (default is 1 second).
@@ -45,8 +50,9 @@ class ChatGPTDefinitionGenerator:
         self.batch_size = batch_size
         self.request_delay = request_delay
         self.model = model
-        # Set the API key for OpenAI to use
-        openai.api_key = self.openai_api_key
+        # Initialize ChatOpenAI model with structured output
+        self.llm = ChatOpenAI(model_name=self.model, openai_api_key=self.openai_api_key, temperature=0.7)
+        self.structured_llm = self.llm.with_structured_output(WordDefinition)
 
     def load_dataset(self):
         """
@@ -59,13 +65,13 @@ class ChatGPTDefinitionGenerator:
             json.JSONDecodeError: If the JSON file has a bad format.
         """
         try:
-            with open(self.testdata_path, 'r') as f:
+            with open(self.testdata_path, 'r', encoding='utf-8') as f:
                 examples = json.load(f)
             self.dataset = Dataset.from_list(examples)
         except FileNotFoundError:
             raise FileNotFoundError(f"Can't find the test data file at: {self.testdata_path}")
         except json.JSONDecodeError:
-            raise json.JSONDecodeError(f"The JSON file at {self.testdata_path} is not right.")
+            raise json.JSONDecodeError(f"The JSON file at {self.testdata_path} is not right.", doc="", pos=0)
 
     def apply_chat_template(self):
         """
@@ -73,15 +79,12 @@ class ChatGPTDefinitionGenerator:
 
         The system message tells ChatGPT what to do, and the user question asks for a definition.
         """
-        system_message = "You are a lexicographer familiar with providing concise definitions of word meanings."
-        template = 'Please provide a concise definition for the meaning of the word "{}" in the following sentence: {}'
-
         def apply_chat_template_func(record):
-            messages = [
-                {"role": "system", "content": system_message},
-                {"role": "user", "content": template.format(record['target'], record['example'])}
-            ]
-            return {'messages': messages}
+            prompt = (
+                f"You are a lexicographer familiar with providing concise definitions of word meanings. "
+                f"Please provide a concise definition for the meaning of the word \"{record['target']}\" in the following sentence: {record['example']}."
+            )
+            return {'prompt': prompt}
 
         self.dataset = self.dataset.map(apply_chat_template_func)
 
@@ -94,16 +97,10 @@ class ChatGPTDefinitionGenerator:
         definitions = []
         for i in range(0, len(self.dataset), self.batch_size):
             batch = self.dataset[i:i + self.batch_size]
-            for messages in batch['messages']:
+            for prompt in batch['prompt']:
                 try:
-                    response = openai.ChatCompletion.create(
-                        model=self.model,
-                        messages=messages,
-                        max_tokens=50,
-                        temperature=0.7
-                    )
-                    definition = response.choices[0].message.content.strip()
-                    definitions.append(definition)
+                    result = self.structured_llm.invoke(prompt)
+                    definitions.append(result["definition"])
                 except Exception as e:
                     warnings.warn(f"Could not make definition: {e}")
                     definitions.append('')
@@ -112,10 +109,15 @@ class ChatGPTDefinitionGenerator:
 
     def print_results(self):
         """
-        Shows the target word, example sentence, and definition for each item.
+        Prints each target word, its example sentence, and the generated definition in JSON format.
         """
         for row in self.dataset:
-            print(f"Target: {row['target']}\nExample: {row['example']}\nDefinition: {row['definition']}\n")
+            result = {
+                "target": row['target'],
+                "example": row['example'],
+                "definition": row['definition']
+            }
+            print(json.dumps(result, ensure_ascii=False, indent=2))
 
     def run(self):
         """
@@ -129,7 +131,7 @@ class ChatGPTDefinitionGenerator:
 if __name__ == "__main__":
     # Set up command-line options
     parser = argparse.ArgumentParser(description="Make word definitions with ChatGPT.")
-    parser.add_argument("--openai_api_key", type=str, required=True, help="Your OpenAI API key")
+    parser.add_argument("--openai_api_key", type=str, required=True, help="OpenAI API key")
     parser.add_argument("--testdata", type=str, required=True, help="Path to the JSON test data file")
     parser.add_argument("--batch_size", type=int, default=32, help="Number of examples per batch (default: 32)")
     parser.add_argument("--request_delay", type=float, default=1.0, help="Delay between requests in seconds (default: 1.0)")
