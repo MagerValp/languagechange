@@ -1,150 +1,87 @@
-import warnings
+import os
 import json
 import argparse
-from datasets import Dataset
-from typing import Literal, Sequence, TypedDict
-import time
-from typing_extensions import Annotated
+from langchain.prompts import PromptTemplate
 from langchain_openai import ChatOpenAI
+from pydantic import BaseModel, Field
 
-# Define types for chat messages
-Role = Literal["system", "user"]
-
-class Message(TypedDict):
-    role: Role
-    content: str
-
-Dialog = Sequence[Message]
-
-# Structured output schema for word definitions
-class WordDefinition(TypedDict):
-    definition: Annotated[str, ..., "A concise definition generated from the example sentence"]
+class DefinitionOutput(BaseModel):
+    """
+    Data model representing the definition of a target word within an example sentence.
+    """
+    target: str = Field(description="The target word")
+    example: str = Field(description="The example sentence")
+    definition: str = Field(description="The definition of the target word as used in the sentence")
 
 class ChatGPTDefinitionGenerator:
     """
-    A simple tool to make short definitions for words using ChatGPT, based on example sentences.
-
-    Attributes:
-        openai_api_key (str): OpenAI API key.
-        testdata_path (str): The path to the JSON file with test data.
-        batch_size (int): How many examples to process at one time.
-        request_delay (float): Time to wait between API requests (in seconds).
-        model (str): The ChatGPT model to use, like "gpt-3.5-turbo".
-        dataset: The data loaded from the JSON file.
+    A class to generate definitions for target words based on provided example sentences using LangChain and ChatGPT.
     """
-
-    def __init__(self, openai_api_key: str, testdata_path: str, batch_size: int = 32, 
-                 request_delay: float = 1.0, model: str = "gpt-3.5-turbo"):
+    def __init__(self, openai_api_key: str, testdata_path: str):
         """
-        Sets up the tool with API key and data details.
-
+        Initializes the DefinitionGenerator with the OpenAI API key and test data file path.
+        
         Args:
-            openai_api_key: OpenAI API key.
-            testdata_path: The path to the JSON file with examples.
-            batch_size: Number of examples to process at once (default is 32).
-            request_delay: Time to wait between requests (default is 1 second).
-            model: The ChatGPT model to use (default is "gpt-3.5-turbo").
+            openai_api_key (str): The API key for OpenAI.
+            testdata_path (str): The file path to the JSON test data.
         """
-        self.openai_api_key = openai_api_key
-        self.testdata_path = testdata_path
-        self.batch_size = batch_size
-        self.request_delay = request_delay
-        self.model = model
-        # Initialize ChatOpenAI model with structured output
-        self.llm = ChatOpenAI(model_name=self.model, openai_api_key=self.openai_api_key, temperature=0.7)
-        self.structured_llm = self.llm.with_structured_output(WordDefinition)
+        # Set the OpenAI API key as an environment variable
+        os.environ["OPENAI_API_KEY"] = openai_api_key
+        
+        # Load test data from the JSON file
+        with open(testdata_path, "r") as f:
+            self.input_data = json.load(f)
 
-    def load_dataset(self):
+        # Define the prompt template for generating definitions
+        self.prompt_template = PromptTemplate(
+            input_variables=["target", "example"],
+            template="You are a lexicographer familiar with providing concise definitions of word meanings. Please provide a concise definition for the meaning of the word '{target}' and the sentencein the following sentence: '{example}'."
+        )
+        
+        # Initialize the ChatOpenAI model with a specified temperature
+        self.llm = ChatOpenAI(model_name="gpt-3.5-turbo", temperature=0.7)
+        
+        # Create the chain by combining the prompt template with the LLM model configured for structured output
+        self.chain = self.prompt_template | self.llm.with_structured_output(DefinitionOutput)
+
+    def generate_definitions(self) -> list:
         """
-        Loads the test data from a JSON file.
-
-        The JSON file should have a list of items, each with a 'target' word and an 'example' sentence.
-
-        Raises:
-            FileNotFoundError: If the file can't be found.
-            json.JSONDecodeError: If the JSON file has a bad format.
-        """
-        try:
-            with open(self.testdata_path, 'r', encoding='utf-8') as f:
-                examples = json.load(f)
-            self.dataset = Dataset.from_list(examples)
-        except FileNotFoundError:
-            raise FileNotFoundError(f"Can't find the test data file at: {self.testdata_path}")
-        except json.JSONDecodeError:
-            raise json.JSONDecodeError(f"The JSON file at {self.testdata_path} is not right.", doc="", pos=0)
-
-    def apply_chat_template(self):
-        """
-        Makes messages for ChatGPT with a system message and a user question for each example.
-
-        The system message tells ChatGPT what to do, and the user question asks for a definition.
-        """
-        def apply_chat_template_func(record):
-            prompt = (
-                f"You are a lexicographer familiar with providing concise definitions of word meanings. "
-                f"Please provide a concise definition for the meaning of the word \"{record['target']}\" in the following sentence: {record['example']}."
-            )
-            return {'prompt': prompt}
-
-        self.dataset = self.dataset.map(apply_chat_template_func)
-
-    def generate_definitions(self):
-        """
-        Uses ChatGPT to make definitions for all examples.
-
-        Adds the definitions to the dataset in a new 'definition' column.
+        Generates definitions for each target word in the input data and returns a list of JSON strings.
+        
+        Returns:
+            list: A list of JSON strings representing the generated definitions.
         """
         definitions = []
-        for i in range(0, len(self.dataset), self.batch_size):
-            batch = self.dataset[i:i + self.batch_size]
-            for prompt in batch['prompt']:
-                try:
-                    result = self.structured_llm.invoke(prompt)
-                    definitions.append(result["definition"])
-                except Exception as e:
-                    warnings.warn(f"Could not make definition: {e}")
-                    definitions.append('')
-                time.sleep(self.request_delay)
-        self.dataset = self.dataset.add_column('definition', definitions)
+        for item in self.input_data:
+            target = item["target"]
+            example = item["example"]
+            # Generate structured output using the chain
+            structured_output = self.chain.invoke({"target": target, "example": example})
+            # print('Test: ', structured_output)
+            # Convert the structured output to a JSON string
+            definition_json = structured_output.model_dump_json()
+            definitions.append(definition_json)
+        return definitions
 
-    def print_results(self):
-        """
-        Prints each target word, its example sentence, and the generated definition in JSON format.
-        """
-        for row in self.dataset:
-            result = {
-                "target": row['target'],
-                "example": row['example'],
-                "definition": row['definition']
-            }
-            print(json.dumps(result, ensure_ascii=False, indent=2))
-
-    def run(self):
-        """
-        Runs the whole process from loading data to showing results.
-        """
-        self.load_dataset()
-        self.apply_chat_template()
-        self.generate_definitions()
-        self.print_results()
-
-if __name__ == "__main__":
-    # Set up command-line options
-    parser = argparse.ArgumentParser(description="Make word definitions with ChatGPT.")
-    parser.add_argument("--openai_api_key", type=str, required=True, help="OpenAI API key")
-    parser.add_argument("--testdata", type=str, required=True, help="Path to the JSON test data file")
-    parser.add_argument("--batch_size", type=int, default=32, help="Number of examples per batch (default: 32)")
-    parser.add_argument("--request_delay", type=float, default=1.0, help="Delay between requests in seconds (default: 1.0)")
-    parser.add_argument("--model", type=str, default="gpt-3.5-turbo", help="ChatGPT model to use (default: gpt-3.5-turbo)")
-
+def main():
+    """
+    Main function to parse command-line arguments and generate definitions.
+    """
+    parser = argparse.ArgumentParser(description="Definition Generator using LangChain and ChatGPT")
+    parser.add_argument("--openai_api_key", required=True, help="OpenAI API Key")
+    parser.add_argument("--testdata", required=True, help="Path to the test data JSON file")
     args = parser.parse_args()
 
-    # Create and start the tool
-    generator = ChatGPTDefinitionGenerator(
-        openai_api_key=args.openai_api_key,
-        testdata_path=args.testdata,
-        batch_size=args.batch_size,
-        request_delay=args.request_delay,
-        model=args.model
-    )
-    generator.run()
+    # Create an instance of DefinitionGenerator with provided arguments
+    generator = ChatGPTDefinitionGenerator(args.openai_api_key, args.testdata)
+
+    # Generate definitions and retrieve a list of JSON strings
+    results = generator.generate_definitions()
+
+    # Print each JSON string
+    for result in results:
+        print(result)
+
+
+if __name__ == "__main__":
+    main()
