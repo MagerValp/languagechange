@@ -53,10 +53,15 @@ class Line:
 
 class Corpus:
 
-    def __init__(self, name, language=None, time=LiteralTime('no time specification'), skip_lines=0, **args):
+    def __init__(self, name, language=None, time=LiteralTime('no time specification'), time_function = None, skip_lines=0, **args):
         self.name = name
         self.language = language
-        self.time = time
+        if time_function is not None and callable(time_function):
+            self.time = time_function(self)
+        elif hasattr(self,'extract_dates') and callable(self.extract_dates):
+            self.time = self.extract_dates()
+        else:
+            self.time = time
         self.skip_lines = skip_lines
 
 
@@ -162,25 +167,19 @@ class Corpus:
                         line._tokens = [token['text'] for token in tokenized_sentence['tokens']]
                         yield line
         
-        elif hasattr(tokenizer, "tokenize") and callable(getattr(tokenizer,"tokenize")):
-            try:
-                for line in self.line_iterator():
-                    text = line.raw_text()
-                    if type(text) == str and len(text.strip()) > 0:
-                        line._tokens = [str(token) for token in tokenizer.tokenize(text)]
-                        yield line
-            except:
-                logging.info(f"ERROR: Could not use method 'tokenize' within {tokenizer} directly as a function to tokenize.")
-
-        elif callable(tokenizer):
-            try:
-                for line in self.line_iterator():
-                    text = line.raw_text()
-                    if type(text) == str and len(text.strip()) > 0:
-                        line._tokens = [str(token) for token in tokenizer(text)]
-                        yield line
-            except:
-                logging.info(f"ERROR: Could not use tokenizer {tokenizer} directly as a function to tokenize.")
+        else:
+            if hasattr(tokenizer, "tokenize") and callable(getattr(tokenizer,"tokenize")):
+                tokenizer = tokenizer.tokenize
+            
+            if callable(tokenizer):
+                try:
+                    for line in self.line_iterator():
+                        text = line.raw_text()
+                        if type(text) == str and len(text.strip()) > 0:
+                            line._tokens = [str(token) for token in tokenizer(text)]
+                            yield line
+                except Exception:
+                    logging.error(f"Could not use tokenizer {tokenizer} directly as a function to tokenize.")
 
 
     def lemmatize(self, lemmatizer = "trankit", pretokenized = False, tokenize = False, split_sentences = False, batch_size=128):
@@ -245,26 +244,27 @@ class Corpus:
                         
 
         # todo: add other lemmatizers if needed
-        
-        if hasattr(lemmatizer, "lemmatize") and callable(getattr(lemmatizer,"lemmatize")):
-            try:
-                for line in self.line_iterator():
-                    text = line.raw_text()
-                    if type(text) == str and len(text.strip()) > 0:
-                        line._lemmas = [str(lemma) for lemma in lemmatizer.lemmatize(text)]
-                        yield line
-            except:
-                logging.info(f"ERROR: Could not use method 'lemmatize' within {lemmatizer} directly as a function to lemmatize.")
+        else:
 
-        elif callable(lemmatizer):
-            try:
-                for line in self.line_iterator():
-                    text = line.raw_text()
-                    if type(text) == str and len(text.strip()) > 0:
-                        line._lemmas = [str(lemma) for lemma in lemmatizer(text)]
-                        yield line
-            except:
-                logging.info(f"ERROR: Could not use method {lemmatizer} directly as a function to lemmatize.")
+            if hasattr(lemmatizer, "lemmatize") and callable(getattr(lemmatizer,"lemmatize")):
+                lemmatizer = lemmatizer.lemmatize
+
+            if callable(lemmatizer):
+                try:
+                    if pretokenized:
+                        for line in self.line_iterator():
+                            tokens = line.tokens()
+                            if type(tokens) == list and len(tokens) != 0:
+                                line._lemmas = [str(lemma) for lemma in lemmatizer(tokens)]
+                                yield line
+                    else:
+                        for line in self.line_iterator():
+                            text = line.raw_text()
+                            if type(text) == str and len(text.strip()) > 0:
+                                line._lemmas = [str(lemma) for lemma in lemmatizer(text)]
+                                yield line
+                except Exception:
+                    logging.error(f"Could not use method {lemmatizer} directly as a function to lemmatize.")
     
 
     def pos_tagging(self, pos_tagger = "trankit", pretokenized = False, tokenize=False, split_sentences = False, batch_size=128):
@@ -312,8 +312,6 @@ class Corpus:
                     pos_tagged_sentences = pos_tagged['sentences']
                     for i, line in enumerate(lines):
                         line._pos_tags = [token['upos'] for token in pos_tagged_sentences[i]['tokens']]
-                        if tokenize:
-                            line._tokens = [token['text'] for token in pos_tagged_sentences[i]['tokens']]
                         yield line
 
                 lines = []
@@ -329,6 +327,27 @@ class Corpus:
                 if lines != []:
                     for line in modify_lines(lines):
                         yield line
+                    
+        else:
+            if hasattr(pos_tagger, "pos_tag") and callable(getattr(pos_tagger,"pos_tag")):
+                pos_tagger = pos_tagger.pos_tag
+            if callable(pos_tagger):
+                try:
+                    if pretokenized:
+                        for line in self.line_iterator():
+                            tokens = line.tokens()
+                            if type(tokens) == list and len(tokens) > 0:
+                                line._pos_tags = [str(pos_tag) for pos_tag in pos_tagger(tokens)]
+                                yield line
+
+                    else:
+                        for line in self.line_iterator():
+                            text = line.raw_text()
+                            if type(text) == str and len(text.strip()) > 0:
+                                line._pos_tags = [str(pos_tag) for pos_tag in pos_tagger(text)]
+                                yield line
+                except Exception:
+                    logging.error(f"Could not use method {pos_tagger} directly as a function to perform POS tagging.")
 
 
     def tokens_lemmas_pos_tags(self, nlp_model="trankit", tokens=True, split_sentences = False, batch_size=128):
@@ -654,7 +673,7 @@ class VerticalCorpus(Corpus):
 # Supports only tokenized corpora so far.
 class XMLCorpus(Corpus):
 
-    def __init__(self, path, sentence_tag='sentence',token_tag='token', is_lemmatized=False, lemma_tag=None, **args):
+    def __init__(self, path, sentence_tag='sentence',token_tag='token', is_lemmatized=False, lemma_tag=None, is_pos_tagged=False, pos_tag_tag=None, **args):
         if not 'name' in args:
             name = path
         super().__init__(name, **args)
@@ -675,6 +694,21 @@ class XMLCorpus(Corpus):
             self.is_lemmatized = False
             self.lemma_tag = ''
 
+        if pos_tag_tag:
+            self.pos_tag_tag = pos_tag_tag
+        else:
+            self.pos_tag_tag = ''
+
+        if is_pos_tagged:
+            self.is_pos_tagged = True
+            if pos_tag_tag != '':
+                self.pos_tag_tag = pos_tag_tag
+            else:
+                self.pos_tag_tag = 'pos'
+        else:
+            self.is_pos_tagged = False
+            self.pos_tag_tag = ''
+
         self.sentence_tag = sentence_tag
         self.token_tag = token_tag
 
@@ -689,11 +723,13 @@ class XMLCorpus(Corpus):
         else:
             fnames = [self.path]
 
-        def get_data(tokens, lemmas = []):
+        def get_data(tokens, lemmas = [], pos_tags = []):
             data = {}
             data['raw_text'] = ' '.join(tokens)
             if self.is_lemmatized and lemmas != []:
                 data['lemmas'] = lemmas
+            if self.is_pos_tagged and pos_tags != []:
+                data['pos_tags'] = pos_tags
             data['tokens'] = tokens
             return data
 
@@ -710,10 +746,11 @@ class XMLCorpus(Corpus):
                             if event == 'start':
                                 tokens = []
                                 lemmas = []
+                                pos_tags = []
                             # If the sentence has ended, create a new Line object with its content
                             elif event == 'end':
                                 if tokens != []:
-                                    data = get_data(tokens, lemmas)
+                                    data = get_data(tokens, lemmas, pos_tags)
                                     yield Line(fname=fname, **data)
                                     elem.clear()
                         elif elem.tag == self.token_tag:
@@ -721,11 +758,12 @@ class XMLCorpus(Corpus):
                                 if self.is_lemmatized:
                                     lemma = self.get_attribute(elem, self.lemma_tag)
                                     lemmas.append(lemma)
+                                if self.is_pos_tagged:
+                                    pos_tag = self.get_attribute(elem, self.pos_tag_tag)
+                                    pos_tags.append(pos_tag)
                                 token = elem.text
                                 tokens.append(token)
                                 elem.clear()
-                     
-
             else:
                 raise Exception('Format not recognized')
 
@@ -775,16 +813,19 @@ class XMLCorpus(Corpus):
 # A class for handling XML corpora specifically from spraakbanken.gu.se
 class SprakBankenCorpus(XMLCorpus):
 
-    def __init__(self, path, sentence_tag='sentence',token_tag='token', is_lemmatized=True, lemma_tag='lemma', **args):
-        super().__init__(path, sentence_tag, token_tag, is_lemmatized, lemma_tag, **args)
+    def __init__(self, path, sentence_tag='sentence',token_tag='token', is_lemmatized=True, lemma_tag='lemma', is_pos_tagged=True, pos_tag_tag='pos', **args):
+        super().__init__(path, sentence_tag, token_tag, is_lemmatized, lemma_tag, is_pos_tagged, pos_tag_tag, **args)
 
     
     def get_attribute(self, tag, attribute):
         content = tag.attrib[attribute]
         if content != None:
-            content = content.strip("|").split("|")
-            if content != ['']:
-                return content[0]
+            if tag == self.lemma_tag:
+                content = content.strip("|").split("|")
+                if content != ['']:
+                    return content[0]
+            else:
+                return content
         return tag.text
 
 
@@ -794,3 +835,21 @@ class HistoricalCorpus(SortedKeyList):
     def __init__(self, corpora:list[Corpus]):
         super().__init__(corpora, key= lambda x: x.time)
 
+    def line_iterator(self):
+        # Iterates through all of the corpora
+        for corpus in self:
+            for line in corpus.line_iterator():
+                yield line
+
+    def search(self, words, strategy='REGEX', search_func=None):
+        """
+        Returns: a dictionary containing all search results from the included corpora.
+        """
+        usages = {}
+        for corpus in self:
+            usage_dict = corpus.search(words, strategy=strategy, search_func=search_func)
+            for key in usage_dict:
+                if not key in usages:
+                    usages[key] = []
+                usages[key].extend(usage_dict[key])
+        return usages

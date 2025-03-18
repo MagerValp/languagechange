@@ -18,8 +18,9 @@ class SCDURel(BaseModel):
 
 
 class PromptModel:
-    def __init__(self, model_name : str, model_provider : str, langsmith_key : str = None, provider_key_name : str = None, provider_key : str = None, scale="float"):
+    def __init__(self, model_name : str, model_provider : str, langsmith_key : str = None, provider_key_name : str = None, provider_key : str = None, scale="float", language : str = None, *args):
         self.model_name = model_name
+        self.language = language
 
         os.environ["LANGSMITH_TRACING"] = "true"
         
@@ -30,13 +31,28 @@ class PromptModel:
             os.environ["LANGSMITH_API_KEY"] = getpass.getpass("Enter API key for LangSmith: ")
 
         if provider_key_name is None:
-            provider_key_name = {'openai':"OPENAI_API_KEY", "groq":"GROQ_API_KEY"}[model_provider] # add more providers
+            provider_key_names = {"openai":"OPENAI_API_KEY",
+                                 "groq":"GROQ_API_KEY",
+                                 "anthropic":"ANTHROPIC_API_KEY",
+                                 "cohere":"COHERE_API_KEY",
+                                 "nvidia":"NVIDIA_API_KEY",
+                                 "fireworks":"FIREWORKS_API_KEY",
+                                 "mistralai":"MISTRAL_API_KEY",
+                                 "together":"TOGETHER_API_KEY",
+                                 "xai":"XAI_API_KEY"}
+            if model_provider in provider_key_names.keys():
+                provider_key_name = provider_key_names[model_provider]
+            # todo: possibly add support for more models
         if provider_key != None:
             os.environ[provider_key_name] = provider_key
         elif not os.environ.get(provider_key_name):
             os.environ[provider_key_name] = getpass.getpass(f"Enter API key for {model_provider}: ")
 
-        llm = init_chat_model(model_name, model_provider=model_provider)
+        try:
+            llm = init_chat_model(model_name, model_provider=model_provider)
+        except:
+            logging.error("Could not initialize chat model.")
+            raise Exception
 
         if scale == "float":
             self.structure = SCFloat
@@ -55,6 +71,16 @@ class PromptModel:
                      system_message = 'You are a lexicographer',
                      user_prompt_template = 'Please provide a number measuring how different the meaning of the word \'{target}\' is between the following example sentences: \n1. {usage_1}\n2. {usage_2}',
                      lemmatize = True):
+        """
+        Takes as input two target usages and returns the degree of semantic change between them, using a chat model with structured output.
+        Args:
+            target_usages (List[TargetUsage]): a list of target usages with the same target word.
+            system_message (str): the system message to use in the prompt
+            user_prompt_template (str): template to use for the user message in the prompt.
+            lemmatize (bool): whether the target word should be lemmatized in the prompt or not. Uses trankit to lemmatize.
+        Returns:
+            int or float or str: the degree of semantic change between the two instances of the target word, alternatively the whole message content if the output is not structured.
+        """
         
         assert len(target_usages) == 2
 
@@ -70,12 +96,15 @@ class PromptModel:
                     return(token['lemma'])
                 
         if lemmatize:
-            p = trankit.Pipeline("english")
+            if self.language == None:
+                logging.error("Could not lemmatize using trankit because no language is set. Please pass a value to 'language' when initializing the model.")
+                raise Exception
+            p = trankit.Pipeline(self.language)
             lemmatized = [p.lemmatize(sentence, is_sent = True) for sentence in sentences]
             lemmas = [get_lemma(lemmatized[i], target_usages[i]) for i in range(2)]
             
             if lemmas[0] != lemmas[1]:
-                logging.info("Lemmas of the two words differ, are you sure they are the same?")
+                logging.info("Lemmas of the two target words differ, are you sure they are different forms of the same lexeme?")
             target = lemmas[0]
         else:
             target = words[0]
@@ -89,8 +118,8 @@ class PromptModel:
         try:
             response = self.model.invoke(prompt)
         except:
-            logging.info("Could not run chat completion.")
-            return None
+            logging.error("Could not run chat completion.")
+            raise Exception
         
         try:
             return response.change
