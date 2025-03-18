@@ -820,7 +820,7 @@ class SprakBankenCorpus(XMLCorpus):
     def get_attribute(self, tag, attribute):
         content = tag.attrib[attribute]
         if content != None:
-            if tag == self.lemma_tag:
+            if attribute == self.lemma_tag:
                 content = content.strip("|").split("|")
                 if content != ['']:
                     return content[0]
