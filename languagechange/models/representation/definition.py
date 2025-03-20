@@ -1,3 +1,4 @@
+import os
 import torch
 import warnings
 import json
@@ -7,6 +8,12 @@ from datasets import Dataset
 from huggingface_hub import login
 from typing import Literal, Sequence, TypedDict
 from transformers import AutoTokenizer, AutoModelForCausalLM
+from langchain.chat_models import init_chat_model
+from langchain_core.prompts import ChatPromptTemplate
+from languagechange.usages import TargetUsage
+from pydantic import BaseModel, Field
+import logging
+from typing import Tuple, List, Union, Any
 
 # Define types for chat dialog outside the class for clarity
 Role = Literal["system", "user"]
@@ -36,7 +43,7 @@ class LlamaDefinitionGenerator:
     """
 
     def __init__(self, model_name: str, ft_model_name: str, hf_token: str, testdata_path: str, 
-                 batch_size: int = 32, max_time: float = 4.5):
+                 batch_size: int = 32, max_time: float = 4.5, max_length: int = 512, temperature: float = 0.7):
         """
         Sets up the LlamaDefinitionGenerator with model and data details.
 
@@ -57,8 +64,10 @@ class LlamaDefinitionGenerator:
         self.ft_model_name = ft_model_name
         self.hf_token = hf_token
         self.testdata_path = testdata_path
+        self.max_length = max_length
         self.batch_size = batch_size
         self.max_time = max_time
+        self.temperature = temperature
 
         # Log in to Hugging Face with token
         login(self.hf_token)
@@ -69,7 +78,7 @@ class LlamaDefinitionGenerator:
                     device_map="auto",
                     torch_dtype=torch.float16,  # Use FP16 for memory efficiency
                     low_cpu_mem_usage=True
-                ).to('cuda')
+                )
         self.model = PeftModel.from_pretrained(chat_model, self.ft_model_name)
         self.model.eval()
 
@@ -131,7 +140,6 @@ class LlamaDefinitionGenerator:
 
         Pads shorter inputs and truncates longer ones.
         """
-        max_length = 512
 
         def formatting_func(record):
             return record['text']
@@ -140,7 +148,7 @@ class LlamaDefinitionGenerator:
             return self.tokenizer(
                 formatting_func(dataset),
                 truncation=True,
-                max_length=max_length,
+                max_length=self.max_length,
                 padding="max_length",
                 add_special_tokens=False
             )
@@ -208,7 +216,7 @@ class LlamaDefinitionGenerator:
                         forced_eos_token_id=self.eos_tokens,
                         max_time=self.max_time * self.batch_size,
                         eos_token_id=self.eos_tokens,
-                        temperature=0.7,
+                        temperature=self.temperature,
                         pad_token_id=self.tokenizer.eos_token_id
                     )
                     answers = self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)
@@ -245,25 +253,128 @@ class LlamaDefinitionGenerator:
         self.generate_definitions()
         self.print_results()
 
-if __name__ == "__main__":
-    # Set up command-line argument parsing
-    parser = argparse.ArgumentParser(description="Generate word definitions using fine-tuned Llama models.")
-    parser.add_argument("--model", type=str, required=True, help="Base model name (e.g., meta-llama/Llama-2-7b-chat-hf)")
-    parser.add_argument("--ft_model", type=str, required=True, help="Fine-tuned model name (e.g., FrancescoPeriti/Llama2Dictionary)")
-    parser.add_argument("--testdata", type=str, required=True, help="Path to JSON test data file")
-    parser.add_argument("--hf_token", type=str, required=True, help="Hugging Face authentication token")
-    parser.add_argument("--batch_size", type=int, default=32, help="Number of examples per batch (default: 32)")
-    parser.add_argument("--max_time", type=float, default=4.5, help="Max time per batch in seconds (default: 4.5)")
 
-    args = parser.parse_args()
 
-    # Create and run the generator
-    generator = LlamaDefinitionGenerator(
-        model_name=args.model,
-        ft_model_name=args.ft_model,
-        hf_token=args.hf_token,
-        testdata_path=args.testdata,
-        batch_size=args.batch_size,
-        max_time=args.max_time
-    )
-    generator.run()
+
+# Data model representing the definition of a target word within an example sentence.
+class DefinitionOutput(BaseModel):
+    """
+    Represents the structured output for a word definition.
+
+    Attributes:
+        target (str): The target word.
+        example (str): The example sentence.
+        definition (str): The concise definition of the target word as used in the sentence.
+    """
+    target: str = Field(description="The target word")
+    example: str = Field(description="The example sentence")
+    definition: str = Field(description="The definition of the target word as used in the sentence")
+
+class ChatModelDefinitionGenerator:
+    """
+    A model to generate concise definitions for target words using a chat model with structured output.
+
+    The model leverages an underlying chat model (initialized with LangChain) that returns a 
+    structured DefinitionOutput.
+    """
+    def __init__(self, model_name: str, model_provider: str, 
+                 langsmith_key: str = None, provider_key_name: str = None, 
+                 provider_key: str = None, language: str = None):
+        """
+        Initializes the DefinitionModel.
+
+        Args:
+            model_name (str): The name of the model.
+            model_provider (str): The model provider (e.g., "openai").
+            langsmith_key (str, optional): API key for LangSmith. Defaults to None.
+            provider_key_name (str, optional): Environment variable name for the provider API key. Defaults to None.
+            provider_key (str, optional): The provider API key. Defaults to None.
+            language (str, optional): Language code for potential lemmatization. Defaults to None.
+        """
+        self.model_name = model_name
+        self.language = language
+
+        os.environ["LANGSMITH_TRACING"] = "true"
+
+        # Set the LangSmith API key.
+        if langsmith_key is not None:
+            os.environ["LANGSMITH_API_KEY"] = langsmith_key
+        elif not os.environ.get("LANGSMITH_API_KEY"):
+            os.environ["LANGSMITH_API_KEY"] = getpass.getpass("Enter API key for LangSmith: ")
+
+        # Determine the provider key name if not provided.
+        if provider_key_name is None:
+            provider_key_names = {
+                "openai": "OPENAI_API_KEY",
+                "groq": "GROQ_API_KEY",
+                "anthropic": "ANTHROPIC_API_KEY",
+                "cohere": "COHERE_API_KEY",
+                "nvidia": "NVIDIA_API_KEY",
+                "fireworks": "FIREWORKS_API_KEY",
+                "mistralai": "MISTRAL_API_KEY",
+                "together": "TOGETHER_API_KEY",
+                "xai": "XAI_API_KEY"
+            }
+            if model_provider in provider_key_names.keys():
+                provider_key_name = provider_key_names[model_provider]
+        # Set the provider API key.
+        if provider_key is not None:
+            os.environ[provider_key_name] = provider_key
+        elif not os.environ.get(provider_key_name):
+            os.environ[provider_key_name] = getpass.getpass(f"Enter API key for {model_provider}: ")
+
+        try:
+            llm = init_chat_model(model_name, model_provider=model_provider)
+        except Exception as e:
+            logging.error("Could not initialize chat model.")
+            raise e
+
+        # Configure the model to use structured output with the DefinitionOutput schema.
+        self.model = llm.with_structured_output(DefinitionOutput)
+
+    def get_definitions(self, target_usages: List) -> List[str]:
+        """
+        Generates concise definitions for each target usage provided.
+
+        Each target usage is expected to have either:
+          - 'target' and 'example' attributes, or 
+          - a text with offsets indicating the target word location.
+
+        Args:
+            target_usages (List): A list of target usage instances.
+
+        Returns:
+            List[str]: A list of definitions or full responses if structured output fails.
+        """
+        definitions = []
+        for usage in target_usages:
+            # Use the provided attributes if available; otherwise, extract from text and offsets.
+            if hasattr(usage, 'target') and hasattr(usage, 'example'):
+                target_word = usage.target
+                example_sentence = usage.example
+            else:
+                target_word = usage.text()[usage.offsets[0]:usage.offsets[1]]
+                example_sentence = usage.text()
+            
+            system_message = "You are a lexicographer familiar with providing concise definitions of word meanings."
+            user_prompt_template = ("Please provide a concise definition for the meaning of the word '{target}' "
+                                    "as used in the following sentence:\nSentence: {example}")
+            
+            prompt_template = ChatPromptTemplate.from_messages(
+                [("system", system_message), ("user", user_prompt_template)]
+            )
+            
+            prompt = prompt_template.invoke({"target": target_word, "example": example_sentence})
+            
+            try:
+                response = self.model.invoke(prompt)
+            except Exception as e:
+                logging.error("Could not run chat completion.")
+                raise e
+            
+            try:
+                definitions.append(response.definition)
+            except Exception:
+                definitions.append(response)
+        
+        return definitions
