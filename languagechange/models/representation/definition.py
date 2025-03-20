@@ -332,7 +332,8 @@ class ChatModelDefinitionGenerator:
         # Configure the model to use structured output with the DefinitionOutput schema.
         self.model = llm.with_structured_output(DefinitionOutput)
 
-    def get_definitions(self, target_usages: List) -> List[str]:
+    def get_definitions(self, target_usages: List, user_prompt_template = ("Please provide a concise definition for the meaning of the word '{target}' "
+                                    "as used in the following sentence:\nSentence: {example}")) -> List[str]:
         """
         Generates concise definitions for each target usage provided.
 
@@ -357,8 +358,6 @@ class ChatModelDefinitionGenerator:
                 example_sentence = usage.text()
             
             system_message = "You are a lexicographer familiar with providing concise definitions of word meanings."
-            user_prompt_template = ("Please provide a concise definition for the meaning of the word '{target}' "
-                                    "as used in the following sentence:\nSentence: {example}")
             
             prompt_template = ChatPromptTemplate.from_messages(
                 [("system", system_message), ("user", user_prompt_template)]
