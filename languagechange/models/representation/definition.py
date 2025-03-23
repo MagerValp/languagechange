@@ -1,8 +1,6 @@
 import os
 import torch
 import warnings
-import json
-import argparse
 from peft import PeftModel
 from datasets import Dataset
 from huggingface_hub import login
@@ -14,6 +12,12 @@ from languagechange.usages import TargetUsage
 from pydantic import BaseModel, Field
 import logging
 from typing import Tuple, List, Union, Any
+import csv
+from os import path
+import pandas as pd
+import torch
+import tqdm
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 
 # Define types for chat dialog outside the class for clarity
 Role = Literal["system", "user"]
@@ -26,44 +30,39 @@ Dialog = Sequence[Message]
 
 class LlamaDefinitionGenerator:
     """
-    A tool to create short, clear definitions for words based on example sentences using fine-tuned Llama models.
+    A tool to create short, clear definitions for words based on example sentences
+    using fine-tuned Llama models.
 
     Attributes:
         model_name (str): Name of the base model (e.g., "meta-llama/Llama-2-7b-chat-hf").
         ft_model_name (str): Name of the fine-tuned model (e.g., "FrancescoPeriti/Llama2Dictionary").
         hf_token (str): Hugging Face token for authentication.
-        testdata_path (str): Path to JSON file with test data.
+        max_length (int): Maximum token length for the prompt.
         batch_size (int): How many examples to process at once.
-        max_time (float): Max time (in seconds) allowed per batch.
+        max_time (float): Maximum time (in seconds) allowed per batch.
+        temperature (float): Generation temperature.
         model: The loaded fine-tuned model ready for generation.
         tokenizer: The tokenizer that prepares text for the model.
-        eos_tokens: Tokens that tell the model when to stop generating.
-        dataset: data loaded from the JSON file.
-        tokenized_dataset: data after being tokenized for the model.
+        eos_tokens: Tokens that signal the end of a definition.
     """
-
-    def __init__(self, model_name: str, ft_model_name: str, hf_token: str, testdata_path: str, 
-                 batch_size: int = 32, max_time: float = 4.5, max_length: int = 512, temperature: float = 0.7):
+    def __init__(self, model_name: str, ft_model_name: str, hf_token: str, 
+                 max_length: int = 512, batch_size: int = 32, max_time: float = 4.5, 
+                 temperature: float = 0.7):
         """
         Sets up the LlamaDefinitionGenerator with model and data details.
 
         Args:
-            model_name: The base model name from Hugging Face (e.g., "meta-llama/Llama-2-7b-chat-hf").
-            ft_model_name: The fine-tuned model name (e.g., "FrancescoPeriti/Llama2Dictionary").
-            hf_token: Hugging Face token to access models.
-            testdata_path: Path to a JSON file with test examples.
-            batch_size: Number of examples to process in one go (default is 32).
-            max_time: Max time in seconds per batch (default is 4.5).
-            
-        Example:
-            gen = LlamaDefinitionGenerator("meta-llama/Llama-2-7b-chat-hf", 
-                                       "FrancescoPeriti/Llama2Dictionary", 
-                                       "hf_token", "testdata.json")
+            model_name (str): The base model name from Hugging Face (e.g., "meta-llama/Llama-2-7b-chat-hf").
+            ft_model_name (str): The fine-tuned model name (e.g., "FrancescoPeriti/Llama2Dictionary").
+            hf_token (str): Hugging Face token to access models.
+            max_length (int): Maximum token length for prompt (default is 512).
+            batch_size (int): Number of examples to process in one go (default is 32).
+            max_time (float): Maximum time in seconds per batch (default is 4.5).
+            temperature (float): Generation temperature (default is 0.7).
         """
         self.model_name = model_name
         self.ft_model_name = ft_model_name
         self.hf_token = hf_token
-        self.testdata_path = testdata_path
         self.max_length = max_length
         self.batch_size = batch_size
         self.max_time = max_time
@@ -74,11 +73,11 @@ class LlamaDefinitionGenerator:
 
         # Load the base model with explicit settings
         chat_model = AutoModelForCausalLM.from_pretrained(
-                    self.model_name,
-                    device_map="auto",
-                    torch_dtype=torch.float16,  # Use FP16 for memory efficiency
-                    low_cpu_mem_usage=True
-                )
+            self.model_name,
+            device_map="auto",
+            torch_dtype=torch.float16,  # Use FP16 for memory efficiency
+            low_cpu_mem_usage=True
+        )
         self.model = PeftModel.from_pretrained(chat_model, self.ft_model_name)
         self.model.eval()
 
@@ -96,162 +95,156 @@ class LlamaDefinitionGenerator:
                            for token in [';', ' ;', '.', ' .']]
         self.eos_tokens.append(self.tokenizer.eos_token_id)
 
-    def load_dataset(self):
+    def _apply_chat_template(self, dialog: Dialog, add_generation_prompt: bool = False) -> str:
         """
-        Loads test data from a JSON file into a dataset.
+        Constructs a prompt string from a dialog list.
 
-        The JSON should be a list of objects, each with 'target' (the word) and 'example' (the sentence).
+        Args:
+            dialog (Dialog): A list of messages (each a dict with keys 'role' and 'content').
+            add_generation_prompt (bool): Whether to append a generation prompt at the end.
 
-        Raises:
-            FileNotFoundError: If the JSON file doesn't exist.
-            json.JSONDecodeError: If the JSON file is badly formatted.
+        Returns:
+            str: The constructed prompt string.
         """
-        try:
-            with open(self.testdata_path, 'r') as f:
-                examples = json.load(f)
-            self.dataset = Dataset.from_list(examples)
-        except FileNotFoundError:
-            raise FileNotFoundError(f"Couldn’t find the test data file at: {self.testdata_path}")
-        except json.JSONDecodeError:
-            raise json.JSONDecodeError(f"The JSON file at {self.testdata_path} isn’t valid.")
-
-    def apply_chat_template(self):
-        """
-        Creates prompts for the model by combining a system message and user question for each example.
-
-        The system message sets the model as a lexicographer, and the user message asks for a definition.
-        """
-        system_message = "You are a lexicographer familiar with providing concise definitions of word meanings."
-        template = 'Please provide a concise definition for the meaning of the word "{}" in the following sentence: {}'
-
-        def apply_chat_template_func(record):
-            dialog = [
-                {"role": "system", "content": system_message},
-                {"role": "user", "content": template.format(record['target'], record['example'])}
-            ]
-            prompt = self.tokenizer.decode(self.tokenizer.apply_chat_template(dialog, add_generation_prompt=True))
-            return {'text': prompt}
-
-        self.dataset = self.dataset.map(apply_chat_template_func)
-
-    def tokenization(self):
-        """
-        Tokenizes the prompts into model-ready format with fixed length of 512 tokens.
-
-        Pads shorter inputs and truncates longer ones.
-        """
-
-        def formatting_func(record):
-            return record['text']
-
-        def tokenization_func(dataset):
-            return self.tokenizer(
-                formatting_func(dataset),
-                truncation=True,
-                max_length=self.max_length,
-                padding="max_length",
-                add_special_tokens=False
-            )
-
-        self.tokenized_dataset = self.dataset.map(tokenization_func)
+        prompt = ""
+        for msg in dialog:
+            if msg["role"] == "system":
+                prompt += f"[SYS] {msg['content']}\n"
+            elif msg["role"] == "user":
+                prompt += f"[USR] {msg['content']}\n"
+        if add_generation_prompt:
+            prompt += "[ASSISTANT]: "
+        return prompt
 
     def extract_definition(self, answer: str) -> str:
         """
         Extracts the actual definition from the model's response based on model type.
 
         Args:
-            answer: The text generated by the model.
+            answer (str): The text generated by the model.
 
         Returns:
-            A cleaned-up definition string with proper formatting.
+            str: A cleaned-up definition string with proper formatting.
 
         Notes:
-            - For Llama-2: Extracts text after '[/INST]'
-            - For Llama-3: Takes the last line
-            - Warns if output appears abnormal
+            - For Llama-2: Extracts text after '[/INST]'.
+            - For Llama-3: Takes the last line.
+            - Warns if output appears abnormal.
         """
         if "Llama-2" in self.model_name:
             definition = answer.split('[/INST]')[-1].strip(" .,;:")
             if 'SYS>>' in definition:
                 definition = ''
-                warnings.warn("Abnormal output detected - the example sentence might be too long. Try shortening it.")
+                warnings.warn("Abnormal output detected – the example may be too long. Try shortening it.")
         elif "Llama-3" in self.model_name:
             definition = answer.split('\n')[-1].strip(" .,;:")
             if not definition:
-                warnings.warn("Empty definition generated - check if example sentence is too long.")
+                warnings.warn("Empty definition generated – check if the example is too long.")
         else:
             definition = ''
-            warnings.warn("Model type not supported - add handling logic in extract_definition if needed")
+            warnings.warn("Model type not supported – add handling logic in extract_definition if needed")
         return definition.replace('\n', ' ') + '\n'
 
-    def generate_definitions(self):
+    def generate_definitions(self, target_usages: List[TargetUsage],
+                             system_message: str = "You are a lexicographer familiar with providing concise definitions of word meanings.",
+                             template: str = 'Please provide a concise definition for the meaning of the word "{}" in the following sentence: {}'
+                             ) -> List[str]:
         """
         Generates definitions for all examples in batches using the model.
 
-        Adds the definitions to the dataset in a new 'definition' column.
+        Args:
+            target_usages (List[TargetUsage]): A list of TargetUsage objects.
+            system_message (str): The system prompt message.
+            template (str): The template for the user prompt with placeholders {target} and {example}.
+
+        Returns:
+            List[str]: Generated definitions corresponding to each TargetUsage.
         """
-        sense_definitions = []
-        device = next(self.model.parameters()).device  # Get model's device
+        prompts = []
         
-        print(f"Using generation device: {device}")
-        print(f"EOS tokens: {self.eos_tokens}")
+        # Create prompt for each target usage using the provided system_message and template
+        for usage in target_usages:
+            target = usage.text()[usage.offsets[0]:usage.offsets[1]]
+            example = usage.text()
+            user_message = template.format(target, example)
+            dialog: Dialog = [
+                {"role": "system", "content": system_message},
+                {"role": "user", "content": user_message}
+            ]
+            # Use our custom _apply_chat_template to construct the prompt string
+            prompt = self._apply_chat_template(dialog, add_generation_prompt=True)
+            prompts.append(prompt)
+        
+        # Tokenize all prompts
+        tokenized = self.tokenizer(
+            prompts,
+            truncation=True,
+            max_length=self.max_length,
+            padding="max_length",
+            add_special_tokens=False,
+            return_tensors="pt"
+        )
+        
+        definitions = []
+        device = next(self.model.parameters()).device
+        input_ids = tokenized["input_ids"].to(device)
+        attention_mask = tokenized["attention_mask"].to(device)
+        
+        total = input_ids.size(0)
+        for i in range(0, total, self.batch_size):
+            batch_input_ids = input_ids[i:i + self.batch_size]
+            batch_attention_mask = attention_mask[i:i + self.batch_size]
+            model_input = {
+                'input_ids': batch_input_ids,
+                'attention_mask': batch_attention_mask
+            }
+            try:
+                output_ids = self.model.generate(
+                    **model_input,
+                    max_new_tokens=50,  # Generate up to 50 new tokens
+                    forced_eos_token_id=self.eos_tokens,  # Note: depends on model API compatibility
+                    max_time=self.max_time * self.batch_size,
+                    eos_token_id=self.eos_tokens,
+                    temperature=self.temperature,
+                    pad_token_id=self.tokenizer.eos_token_id
+                )
+                answers = self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)
+                definitions.extend([self.extract_definition(answer) for answer in answers])
+            except Exception as e:
+                warnings.warn(f"Failed generation for batch starting at index {i}: {e}")
+                batch_size = batch_input_ids.size(0)
+                definitions.extend([''] * batch_size)
+        
+        if len(definitions) != total:
+            raise ValueError(f"Generated definitions count ({len(definitions)}) doesn't match input count ({total}).")
+        return definitions
 
-        with torch.no_grad():
-            for i in range(0, len(self.tokenized_dataset), self.batch_size):
-                batch = self.tokenized_dataset[i:i + self.batch_size]
-
-                # Convert to tensors and move to model's device
-                input_ids = torch.tensor(batch['input_ids']).to(device)
-                attention_mask = torch.tensor(batch['attention_mask']).to(device)
-
-                model_input = {
-                    'input_ids': input_ids,
-                    'attention_mask': attention_mask
-                }
-
-                try:
-                    output_ids = self.model.generate(
-                        **model_input,
-                        max_new_tokens=50,  # Generate up to 50 new tokens
-                        forced_eos_token_id=self.eos_tokens,
-                        max_time=self.max_time * self.batch_size,
-                        eos_token_id=self.eos_tokens,
-                        temperature=self.temperature,
-                        pad_token_id=self.tokenizer.eos_token_id
-                    )
-                    answers = self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)
-                    sense_definitions.extend(self.extract_definition(answer) for answer in answers)
-                except Exception as e:
-                    warnings.warn(f"Failed to generate for batch {i//self.batch_size}: {e}")
-                    current_batch_size = len(batch['input_ids'])
-                    sense_definitions.extend([''] * current_batch_size)
-                    continue
-
-        # Validate output length
-        if len(sense_definitions) != len(self.dataset):
-            raise ValueError(f"Generated definitions count ({len(sense_definitions)}) "
-                             f"doesn't match dataset size ({len(self.dataset)})")
-
-        self.dataset = self.dataset.add_column('definition', sense_definitions)
-    
-    
-
-    def print_results(self):
+    def print_results(self, target_usages: List[TargetUsage], definitions: List[str]) -> None:
         """
         Displays the target word, example sentence, and generated definition for each entry.
-        """
-        for row in self.dataset:
-            print(f"Target: {row['target']}\nExample: {row['example']}\nDefinition: {row['definition']}")
 
-    def run(self):
+        Args:
+            target_usages (List[TargetUsage]): List of TargetUsage objects.
+            definitions (List[str]): List of generated definitions.
         """
-        Executes the complete workflow from data loading to result printing.
+        for usage, definition in zip(target_usages, definitions):
+            target = usage.text()[usage.offsets[0]:usage.offsets[1]]
+            print(f"Target: {target}\nExample: {usage.text()}\nDefinition: {definition}\n")
+
+    def run(self, target_usages: List[TargetUsage],
+            system_message: str = "You are a lexicographer familiar with providing concise definitions of word meanings.",
+            template: str = 'Please provide a concise definition for the meaning of the word "{}" in the following sentence: {}'
+            ) -> None:
         """
-        self.load_dataset()
-        self.apply_chat_template()
-        self.tokenization()
-        self.generate_definitions()
-        self.print_results()
+        Executes the complete workflow from generating definitions to printing the results.
+
+        Args:
+            target_usages (List[TargetUsage]): List of TargetUsage objects.
+            system_message (str): The system prompt message.
+            template (str): The template for the user prompt.
+        """
+        definitions = self.generate_definitions(target_usages, system_message, template)
+        self.print_results(target_usages, definitions)
 
 
 
@@ -332,48 +325,211 @@ class ChatModelDefinitionGenerator:
         # Configure the model to use structured output with the DefinitionOutput schema.
         self.model = llm.with_structured_output(DefinitionOutput)
 
-    def get_definitions(self, target_usages: List, user_prompt_template = ("Please provide a concise definition for the meaning of the word '{target}' "
-                                    "as used in the following sentence:\nSentence: {example}")) -> List[str]:
+    def generate_definitions(self, target_usages: List[TargetUsage],
+                        user_prompt_template: str = ("Please provide a concise definition for the meaning of the word '{target}' as used in the following sentence:\nSentence: {example}")
+                       ) -> List[str]:
         """
-        Generates concise definitions for each target usage provided.
-
-        Each target usage is expected to have either:
-          - 'target' and 'example' attributes, or 
-          - a text with offsets indicating the target word location.
-
+        Generates definitions for each TargetUsage using a chat model.
+        
         Args:
-            target_usages (List): A list of target usage instances.
-
+            target_usages (List[TargetUsage]): List of target usages.
+            user_prompt_template (str): Template for the user prompt.
+        
         Returns:
-            List[str]: A list of definitions or full responses if structured output fails.
+            List[str]: List of generated definitions.
         """
         definitions = []
+        system_message = "You are a lexicographer familiar with providing concise definitions of word meanings."
+        prompt_template = ChatPromptTemplate.from_messages(
+            [("system", system_message), ("user", user_prompt_template)]
+        )
+        
         for usage in target_usages:
-            # Use the provided attributes if available; otherwise, extract from text and offsets.
+            # Extract target word and example sentence
             if hasattr(usage, 'target') and hasattr(usage, 'example'):
                 target_word = usage.target
                 example_sentence = usage.example
             else:
                 target_word = usage.text()[usage.offsets[0]:usage.offsets[1]]
                 example_sentence = usage.text()
-            
-            system_message = "You are a lexicographer familiar with providing concise definitions of word meanings."
-            
-            prompt_template = ChatPromptTemplate.from_messages(
-                [("system", system_message), ("user", user_prompt_template)]
-            )
-            
             prompt = prompt_template.invoke({"target": target_word, "example": example_sentence})
-            
             try:
                 response = self.model.invoke(prompt)
+                try:
+                    definitions.append(response.definition)
+                except Exception:
+                    definitions.append(response)
             except Exception as e:
-                logging.error("Could not run chat completion.")
-                raise e
-            
-            try:
-                definitions.append(response.definition)
-            except Exception:
-                definitions.append(response)
-        
+                logging.error(f"Could not run chat completion: {e}")
+                definitions.append("")
         return definitions
+
+
+
+class T5DefinitionGenerator:
+    """Generates word definitions using a T5 model."""
+
+    def __init__(self, model_path, bsize=4, max_length=256, filter_target=True,
+                 sampling=False, temperature=1.0, repetition_penalty=1.0,
+                 num_beams=1, num_beam_groups=1):
+        """
+        Initialize the T5 definition generator.
+
+        Args:
+            model_path (str): Path or name of the T5 model.
+            bsize (int): Batch size for generation. Defaults to 4.
+            max_length (int): Max input length for tokenization. Defaults to 256.
+            filter_target (bool): Filter target word from definitions. Defaults to True.
+            sampling (bool): Use sampling instead of greedy decoding. Defaults to False.
+            temperature (float): Sampling temperature. Defaults to 1.0.
+            repetition_penalty (float): Penalty for repeated tokens. Defaults to 1.0.
+            num_beams (int): Number of beams for beam search. Defaults to 1.
+            num_beam_groups (int): Number of beam groups for diversity. Defaults to 1.
+        """
+        self.logger = logging.getLogger(__name__)
+        logging.basicConfig(format="%(asctime)s : %(levelname)s : %(message)s", level=logging.INFO)
+
+        self.model_path = model_path
+        self.bsize = bsize
+        self.max_length = max_length
+        self.filter_target = filter_target
+        self.sampling = sampling
+        self.temperature = temperature
+        self.repetition_penalty = repetition_penalty
+        self.num_beams = num_beams
+        self.num_beam_groups = num_beam_groups
+
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.logger.info(f"Loading model from {model_path}...")
+        self.tokenizer = AutoTokenizer.from_pretrained(model_path)
+        self.model = (AutoModelForSeq2SeqLM.from_pretrained(model_path, device_map="auto")
+                      if torch.cuda.is_available() else
+                      AutoModelForSeq2SeqLM.from_pretrained(model_path, low_cpu_mem_usage=True))
+        self.model.to(self.device)
+        self.logger.info("Model loaded.")
+
+        self.prompts = [
+            ["", "post"], ["Give the definition of <TRG>:", "pre"], ["Define <TRG>:", "pre"],
+            ["Define the word <TRG>:", "pre"], ["What is the definition of <TRG>?", "pre"],
+            ["Give the definition of <TRG>", "post"], ["Define <TRG>", "post"],
+            ["Define the word <TRG>", "post"], ["What is the definition of <TRG>?", "post"],
+            ["Quelle est la définition de <TRG>?", "post"], ["Что такое <TRG>?", "post"],
+            ["Hva betyr <TRG>?", "post"], ["Was ist die Definition von <TRG>?", "post"],
+            ["Mikä on <TRG>?", "post"]
+        ]
+
+    def load_data(self, path_to_data, split="test"):
+        """
+        Load and preprocess data from a file or directory.
+
+        Args:
+            path_to_data (str): Path to input file or directory.
+            split (str): Data split (e.g., 'test', 'trial'). Defaults to 'test'.
+
+        Returns:
+            pd.DataFrame: Preprocessed data with 'Targets' and 'Real_Contexts' columns.
+
+        Raises:
+            FileNotFoundError: If the specified file or directory doesn’t exist.
+        """
+        if not path.exists(path_to_data):
+            raise FileNotFoundError(f"Data path not found: {path_to_data}")
+        
+        if path.isfile(path_to_data):
+            self.logger.info(f"Loading file: {path_to_data}")
+            df = pd.read_csv(path_to_data, delimiter="\t", header="infer", quoting=csv.QUOTE_NONE,
+                             encoding="utf-8", on_bad_lines="warn")
+            if len(df.columns) == 2:
+                df.columns = ["Targets", "Context"]
+            df.dropna(subset=["Context"], inplace=True)
+        else:
+            self.logger.info(f"Loading directory: {path_to_data}")
+            if "oxford" not in path_to_data and "wordnet" not in path_to_data:
+                datafile = path.join(path_to_data, f"{split}.complete.tsv.gz" if split else "complete.tsv.gz")
+                df = pd.read_csv(datafile, delimiter="\t", header=0, quoting=csv.QUOTE_NONE,
+                                 encoding="utf-8", on_bad_lines="warn")
+                df["Context"] = df.example
+                df["Targets"] = [w.split("%")[0] for w in df.word]
+                try:
+                    df["Definition"] = df.gloss
+                except AttributeError:
+                    self.logger.info("No definitions found.")
+            else:
+                datafile = path.join(path_to_data, f"{split}.eg.gz")
+                datafile_defs = path.join(path_to_data, f"{split}.txt.gz")
+                df = pd.read_csv(datafile, delimiter="\t", quoting=csv.QUOTE_NONE,
+                                 encoding="utf-8", on_bad_lines="warn")
+                df_defs = pd.read_csv(datafile_defs, delimiter="\t", quoting=csv.QUOTE_NONE,
+                                      encoding="utf-8", on_bad_lines="warn")
+                df_defs.columns = ["Sense", "Ignore1", "Ignore2", "Definition", "Ignore3", "Ignore4"]
+                df.columns = ["Sense", "Context"]
+                df["Targets"] = [w.split("%")[0] for w in df.Sense]
+                df["Definition"] = df_defs.Definition
+        if "wordnet" in path_to_data:
+            df["POS"] = [w.split("%")[1].split(".")[2] for w in df.Sense]
+        df["Real_Contexts"] = [ctxt.replace("<TRG>", tgt).strip() for ctxt, tgt in zip(df.Context, df.Targets)]
+        return df
+
+    def _generate_definitions(self, prompts, targets):
+        """Generate definitions for the given prompts (internal use)."""
+        self.logger.info(f"Tokenizing with max length {self.max_length}...")
+        inputs = self.tokenizer(prompts, return_tensors="pt", padding=True, truncation=True,
+                                max_length=self.max_length)
+        target_ids = torch.tensor([t[-1] for t in self.tokenizer(targets, add_special_tokens=False).input_ids])
+
+        if torch.cuda.is_available():
+            inputs = {k: v.to(self.device) for k, v in inputs.items()}
+            target_ids = target_ids.to(self.device)
+
+        dataset = torch.utils.data.TensorDataset(inputs["input_ids"], inputs["attention_mask"], target_ids)
+        dataloader = torch.utils.data.DataLoader(dataset, batch_size=self.bsize, shuffle=False)
+
+        gen_args = {
+            "do_sample": self.sampling, "num_beams": self.num_beams, "num_beam_groups": self.num_beam_groups,
+            "temperature": self.temperature, "repetition_penalty": self.repetition_penalty
+        }
+        if self.num_beam_groups > 1:
+            gen_args["diversity_penalty"] = 0.5
+
+        definitions = []
+        for inp, att, tgt_ids in tqdm.tqdm(dataloader):
+            outputs = (self.model.generate(input_ids=inp, attention_mask=att, max_new_tokens=60,
+                                          bad_words_ids=[[el] for el in tgt_ids.tolist()], **gen_args)
+                       if self.filter_target else
+                       self.model.generate(input_ids=inp, attention_mask=att, max_new_tokens=60, **gen_args))
+            definitions.extend(self.tokenizer.batch_decode(outputs, skip_special_tokens=True))
+        return definitions
+
+    def generate_definitions(self, df, prompt_index=8):
+        """
+        Generate definitions for words in the DataFrame.
+
+        Args:
+            df (pd.DataFrame): Data with 'Targets' and 'Context' or 'Real_Contexts' columns.
+            prompt_index (int): Index of the prompt template to use. Defaults to 8.
+
+        Returns:
+            pd.DataFrame: Updated DataFrame with 'Generated_Definition' column.
+
+        Raises:
+            ValueError: If prompt_index is invalid or required columns are missing.
+        """
+        if prompt_index < 0 or prompt_index >= len(self.prompts):
+            raise ValueError(f"Prompt index {prompt_index} is out of range (0-{len(self.prompts)-1})")
+        if "Targets" not in df.columns or ("Context" not in df.columns and "Real_Contexts" not in df.columns):
+            raise ValueError("DataFrame must contain 'Targets' and either 'Context' or 'Real_Contexts'")
+
+        task_prefix = self.prompts[prompt_index]
+        self.logger.info(f"Using prompt: {task_prefix}")
+        context_col = "Real_Contexts" if "Real_Contexts" in df.columns else "Context"
+        prompts = [" ".join([task_prefix[0].replace("<TRG>", tgt), ctx]) if task_prefix[1] == "pre"
+                   else " ".join([ctx, task_prefix[0].replace("<TRG>", tgt)])
+                   for tgt, ctx in zip(df["Targets"], df[context_col])]
+        df["Generated_Definition"] = self._generate_definitions(prompts, df["Targets"].tolist())
+        df["Real_Contexts"] = prompts
+        return df
+
+    def save_definitions(self, df, output_file):
+        """Save the DataFrame with definitions to a TSV file."""
+        df.to_csv(output_file, sep="\t", index=False, encoding="utf-8", quoting=csv.QUOTE_NONE)
+        self.logger.info(f"Saved definitions to {output_file}")
