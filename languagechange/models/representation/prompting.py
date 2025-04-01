@@ -1,4 +1,4 @@
-from typing import Tuple, List, Union, Any
+from typing import List, Union
 from languagechange.usages import TargetUsage
 import getpass
 import os
@@ -18,7 +18,7 @@ class SCDURel(BaseModel):
 
 
 class PromptModel:
-    def __init__(self, model_name : str, model_provider : str, langsmith_key : str = None, provider_key_name : str = None, provider_key : str = None, scale="float", language : str = None, *args):
+    def __init__(self, model_name : str, model_provider : str, langsmith_key : str = None, provider_key_name : str = None, provider_key : str = None, structure:Union[str,BaseModel]="float", language : str = None, **kwargs):
         self.model_name = model_name
         self.language = language
 
@@ -32,31 +32,71 @@ class PromptModel:
 
         if provider_key_name is None:
             provider_key_names = {"openai":"OPENAI_API_KEY",
-                                 "groq":"GROQ_API_KEY",
                                  "anthropic":"ANTHROPIC_API_KEY",
+                                 "azure":"AZURE_OPENAI_API_KEY",
+                                 "groq":"GROQ_API_KEY",
                                  "cohere":"COHERE_API_KEY",
                                  "nvidia":"NVIDIA_API_KEY",
                                  "fireworks":"FIREWORKS_API_KEY",
                                  "mistralai":"MISTRAL_API_KEY",
                                  "together":"TOGETHER_API_KEY",
+                                 "ibm":"WATSONX_APIKEY",
+                                 "databricks":"DATABRICKS_TOKEN",
                                  "xai":"XAI_API_KEY"}
             if model_provider in provider_key_names.keys():
                 provider_key_name = provider_key_names[model_provider]
-            # todo: possibly add support for more models
+                
         if provider_key != None:
             os.environ[provider_key_name] = provider_key
-        elif not os.environ.get(provider_key_name):
+        elif provider_key_name != None and not os.environ.get(provider_key_name):
             os.environ[provider_key_name] = getpass.getpass(f"Enter API key for {model_provider}: ")
 
-        try:
-            llm = init_chat_model(model_name, model_provider=model_provider)
-        except:
-            logging.error("Could not initialize chat model.")
-            raise Exception
+        # special cases
+        if model_provider == "azure":
+            # pip install -qU "langchain[openai]"
+            from langchain_openai import AzureChatOpenAI
+            llm = AzureChatOpenAI(
+                azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
+                azure_deployment=os.environ["AZURE_OPENAI_DEPLOYMENT_NAME"],
+                openai_api_version=os.environ["AZURE_OPENAI_API_VERSION"],
+            )
 
-        if scale == "float":
+        elif model_provider == "ibm":
+            if 'url' in kwargs and 'project_id' in kwargs:
+                # pip install -qU "langchain-ibm"
+                from langchain_ibm import ChatWatsonx
+                
+                llm = ChatWatsonx(model_id = model_name,
+                              url=kwargs.get('url'),
+                              project_id=kwargs.get('project_id')
+                              )
+            else:
+                raise Exception("Pass 'url' and 'project_id' to initialize a ChatWatsonx model.")
+            
+        elif model_provider == "databricks":
+            if 'databricks_host_url' in kwargs:
+                os.environ["DATABRICKS_HOST"] = kwargs.get('databricks_host_url')
+            else:
+                raise Exception("Pass 'databricks_host_url' to initialize a Databricks model.")
+            # pip install -qU "databricks-langchain"
+            from databricks_langchain import ChatDatabricks
+            llm = ChatDatabricks(endpoint=model_name)
+        else:
+            try:
+                llm = init_chat_model(model_name, model_provider=model_provider)
+            except:
+                logging.error("Could not initialize chat model.")
+                raise Exception
+
+        if not isinstance(structure,str) and issubclass(structure, BaseModel):
+            if 'change' in structure.model_fields:
+                self.structure = structure
+            else:
+                logging.error("A custom BaseModel needs to have a field named 'change'.")
+                raise Exception
+        elif structure == "float":
             self.structure = SCFloat
-        elif scale == "DURel":
+        elif structure == "DURel":
             self.structure = SCDURel
         else:
             self.structure = None
