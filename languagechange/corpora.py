@@ -829,27 +829,96 @@ class SprakBankenCorpus(XMLCorpus):
         return tag.text
 
 
-# todo: add ways to extract the year from corpora
+
 class HistoricalCorpus(SortedKeyList):
 
-    def __init__(self, corpora:list[Corpus]):
-        super().__init__(corpora, key= lambda x: x.time)
+    def __new__(cls, *args, **kwargs):
+        """Ensures only valid arguments go to SortedKeyList"""
+        return super().__new__(cls)
+
+    def __init__(self, corpora:Union[List[Corpus],str], key=lambda c : c.time, corpus_type=None, time_function=None):
+        """
+            This class is a SortedKeyList of corpora. A historical corpus can be initialised either from a path where the files are located, or from a list of already instanciated Corpus objects.
+
+            Args:
+                corpora ([Corpus]|str): a list of corpora or a path where the corpora are stored.
+                key (function, default = lambda c : c.time): the key by which the corpora are sorted. Default sorting is by time, in ascending order
+                corpus_type (str, default=None): the kind of corpus. Needs to be provided if initalising from a folder, and then needs to be one of 'line_by_line','vertical','xml', and 'sprakbanken'.
+                time_function (function, default = None): the function used to extract a time value for each corpus. Needed if initialising from a folder.
+        """
+        if isinstance(corpora, str):
+            try:
+                if corpus_type not in ['line_by_line','vertical','xml','sprakbanken']:
+                    logging.error("When initialising from a folder path, corpus_type must be one of 'line_by_line','vertical','xml' and 'sprakbanken'.")
+                    raise ValueError
+                corpora_list = []
+                for file in os.listdir(corpora):
+                    try:
+                        if corpus_type == 'line_by_line':
+                            corpus = LinebyLineCorpus(os.path.join(corpora,file),time_function=time_function)
+                        elif corpus_type == 'vertical':
+                            corpus = VerticalCorpus(os.path.join(corpora,file),time_function=time_function)
+                        elif corpus_type == 'xml':
+                            corpus = XMLCorpus(os.path.join(corpora,file),time_function=time_function)
+                        elif corpus_type == 'sprakbanken':
+                            corpus = SprakBankenCorpus(os.path.join(corpora,file),time_function=time_function)
+                        corpora_list.append(corpus)
+                    except:
+                        logging.error(f"Could not initialise a corpus from path {os.path.join(dir,file)}.")
+                        continue
+                corpora = corpora_list
+            except:
+                logging.error(f"Could not use path {corpora} to intitialize corpora.")
+                raise Exception
+        elif isinstance(corpora, list):
+            for corpus in corpora:
+                if not isinstance(corpus, Corpus):
+                    logging.error("Every element in 'corpora' needs to be a Corpus object.")
+                    raise Exception
+        else:
+            logging.error("'corpora' needs to be either a string or a list of Corpus objects.")
+            raise Exception
+        super().__init__(corpora, key)
+        
 
     def line_iterator(self):
-        # Iterates through all of the corpora
-        for corpus in self:
-            for line in corpus.line_iterator():
-                yield line
-
-    def search(self, words, strategy='REGEX', search_func=None):
         """
-        Returns: a dictionary containing all search results from the included corpora.
+            Iterates through all of the corpora, and yields all of the lines that are possible to get.
+        """
+        for corpus in self:
+            try:
+                for line in corpus.line_iterator():
+                    yield line
+            except:
+                logging.error(f"Could not get lines from {corpus.name}.")
+
+    def search(self, words : List[str], strategy='REGEX', search_func=None, index_by_corpus=False):
+        """
+            Searches through all of the corpora by calling search() for each of them.
+
+            Args:
+                words ([str]): a list of the words to be searched, passed to Corpus.search().
+                strategy (str|[str], default='REGEX'): the strategy to use when searching, passed to Corpus.search().
+                search_func (function, default=None): a custom search function, passed to Corpus.search().
+                index_by_corpus (bool, default=False): decides whether the usages for a given word should be a dictionary, with keys as the corpus names and values as lists of usages, or a list of all usages across corpora.
+
+            Returns: a dictionary containing all search results from the included corpora.
         """
         usages = {}
         for corpus in self:
-            usage_dict = corpus.search(words, strategy=strategy, search_func=search_func)
+            try:
+                usage_dict = corpus.search(words, strategy=strategy, search_func=search_func)
+            except:
+                logging.error(f"Could not search through {corpus.name}.")
+                continue
             for key in usage_dict:
                 if not key in usages:
-                    usages[key] = []
-                usages[key].extend(usage_dict[key])
+                    if index_by_corpus:
+                        usages[key] = {corpus.name : []}
+                    else:
+                        usages[key] = []
+                if index_by_corpus:
+                    usages[key][corpus.name] = usage_dict[key]
+                else:
+                    usages[key].extend(usage_dict[key])
         return usages
