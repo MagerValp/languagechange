@@ -13,6 +13,14 @@ class LiteralTime(Time):
         assert type(other) == LiteralTime
         return self.time == other.time
     
+    def __lt__(self, other):
+        assert type(other) == LiteralTime
+        return self.time < other.time
+    
+    def __le__(self, other):
+        assert type(other) == LiteralTime
+        return self.time <= other.time
+    
     def __repr__(self):
         return self.time
 
