@@ -7,7 +7,7 @@ import logging
 class ChangeTypeClassifier:
 
     def __init__(self, model_name = 'ChangeIsKey/change-type-classifier', max_length=512):
-        self.model = CrossEncoder(model_name, max_length=max_length)
+        self.model = CrossEncoder(model_name, max_length=max_length)    
 
 
     def predict(self, definitions : List[tuple[str]], all_scores = False, labels = True):
