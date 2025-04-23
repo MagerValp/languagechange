@@ -69,7 +69,18 @@ class Corpus:
         self.sentences_iterator = sentences
 
 
-    def search(self, words, strategy='REGEX', search_func=None):
+    def search(self,
+               words,
+               regex : bool = True,
+               word_feature: str | set = 'LEMMA',
+               search_func=None
+        ):
+        VALID_WORD_FEATURES = ['LEMMA', 'TOKEN', 'POS']
+        if type(word_feature) == str and word_feature in VALID_WORD_FEATURES:
+            word_feature = set({word_feature})
+
+        if not word_feature.issubset(VALID_WORD_FEATURES):
+            raise ValueError("'word_feature' must be set to one of the following values: ", VALID_WORD_FEATURES)
 
         for j,w in enumerate(words):
             if type(w) == str:
@@ -86,8 +97,7 @@ class Corpus:
 
         usage_dictionary = {} # need to be saved in cache
 
-        if strategy == 'REGEX':
-
+        if regex:
             for word in words:
                 usage_dictionary[word.target] = TargetUsageList()
 
@@ -99,37 +109,37 @@ class Corpus:
                     for offsets in search_func(word.target, line.raw_text()):
                         usage_dictionary[word.target].append(TargetUsage(line.raw_text(), offsets, self.time))
                         n_usages = n_usages + 1
-
             logging.info(f"{n_usages} usages found.")
         else:
 
-            if type(strategy) == str:
-                strategy = set([s.strip().upper() for s in strategy.split('+')])
-            elif type(strategy) == list:
-                strategy = set([s.upper() for s in strategy])
-
             for word in words:
-                word_form = word.target if 'INFLECTED' in strategy else word.lemma
+                word_form = word.target if 'LEMMA' not in word_feature else word.lemma
                 usage_dictionary[word_form] = TargetUsageList()
 
             logging.info("Scanning the corpus..")
             n_usages = 0
-
             for line in self.line_iterator():
-                line_tokens = line.tokens() if 'INFLECTED' in strategy else line.lemmas()
-                if line_tokens == None:
-                    raise Exception(f"Some of the required features {strategy} are not available for Corpus {self.name}")
-                for j,token in enumerate(line_tokens):
-                    for word in words:
-                        word_form = word.target if 'INFLECTED' in strategy else word.lemma
-                        if word_form == token:
-                            if (not 'POS' in strategy) or ('POS' in strategy and word_form.pos == line.pos[j]):
-                                offsets = [0,0]
-                                if not j == 0:
-                                    offsets[0] = len(' '.join(line.tokens()[:j])) + 1
-                                offsets[1] = offsets[0] + len(line.tokens()[j])
-                                usage_dictionary[word_form].append(TargetUsage(' '.join(line.tokens()), offsets, self.time))
-                                n_usages = n_usages + 1
+                line_tokens = line.tokens()
+                line_lemmas = line.lemmas() if 'LEMMA' in word_feature else None
+                line_pos_tags = line.pos_tags() if 'POS' in word_feature else None
+                for word_form in usage_dictionary:
+                    for j in range(len(line_tokens)):
+                        if (
+                            ('TOKEN' in word_feature and word_form == line_tokens[j]) or
+                            (line_lemmas and word_form == line_lemmas[j]) or
+                            (line_pos_tags and word_form == line_pos_tags[j])
+                        ):
+                            match = True
+                        else:
+                            match = False
+
+                        if match:
+                            offsets = [0,0]
+                            if not j == 0:
+                                offsets[0] = len(' '.join(line_tokens[:j])) + 1
+                            offsets[1] = offsets[0] + len(line_tokens[j])
+                            usage_dictionary[word_form].append(TargetUsage(' '.join(line.tokens()), offsets, self.time))
+                            n_usages = n_usages + 1
 
             logging.info(f"{n_usages} usages found.")
         return usage_dictionary
