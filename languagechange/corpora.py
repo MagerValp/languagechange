@@ -2,14 +2,15 @@ import os
 import gzip
 import random
 from languagechange.resource_manager import LanguageChange
-from languagechange.usages import Target, TargetUsage, TargetUsageList
+from langueagechange.search import SearchPattern, SearchTerm
+from languagechange.usages import Target, TargetUsage, TargetUsageList, UsageDictionary
 import re
 from languagechange.utils import LiteralTime, NumericalTime, TimeInterval
 from sortedcontainers import SortedKeyList
 import logging
 import lxml.etree as ET
 import trankit
-from typing import List, Union, Self
+from typing import Callable, List, Union, Self, Pattern
 import datetime
 
 logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
@@ -17,8 +18,18 @@ logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=lo
 
 class Line:
 
-    def __init__(self, raw_text=None, tokens=None, lemmas=None, pos_tags=None, fname=None):
+    def __init__(self,
+                 raw_text=None,
+                 tokens=None,
+                 lemmas=None,
+                 pos_tags=None,
+                 fname=None,
+                 raw_lemma_text=None,
+                 raw_pos_text = None
+        ):
         self._raw_text = raw_text
+        self._raw_lemma_text = raw_lemma_text
+        self._raw_pos_text = raw_pos_text
         self._tokens = tokens
         self._lemmas = lemmas
         self._pos_tags = pos_tags
@@ -36,6 +47,16 @@ class Line:
     def pos_tags(self):
         return self._pos_tags
 
+    def tokens_by_feature(self, feat = str):
+        if feat == 'token':
+            return self.tokens()
+        elif feat == 'lemma':
+            return self.lemmas
+        elif feat == 'pos':
+            return self.pos_tags
+        else:
+            raise ValueError(f"'{feat}' is not a valid word feature")
+
     def raw_text(self):
         if not self._raw_text == None:
             return self._raw_text
@@ -46,6 +67,55 @@ class Line:
                 return ' '.join(self._lemmas)
             else:
                 raise Exception('No valid data in Line')
+
+    def raw_lemma_text(self):
+        if not self._raw_lemmas == None:
+            return self._raw_lemmas
+        return ' '.join(self._lemmas)
+
+    def raw_pos_text(self):
+        if not self._raw_pos_text == None:
+            return self._raw_pos_text
+        return ' '.join(self._raw_pos_text)
+
+    def raw_text_by_feature(self, feat = 'token'):
+        if feat == 'token':
+            return self.raw_text()
+        elif feat == 'lemma':
+            return self.raw_lemma_text()
+        elif feat == 'pos':
+            return self.raw_pos_text()
+        else:
+            raise ValueError(f"'{feat}' is not a valid word feature")
+
+    def search(self, search_term : SearchTerm) -> List[TargetUsage]:
+        tul = TargetUsageList()
+        for feat in search_term.word_feature:
+            if search_term.regex:
+                if search_term.search_func:
+                    def search_func(word, line):
+                        offsets = []
+                        rex = re.compile(f'( |^)+{word}( |$)+',re.MULTILINE)
+                        for fi in re.finditer(rex, line):
+                            s = line[fi.start():fi.end()].find(word)
+                            offsets.append([fi.start()+s, fi.start()+s+len(word)])
+                        return offsets
+                raw_text_by_feature = self.raw_text_by_feature(feat)
+                for offsets in search_func(search_term.term, raw_text_by_feature):
+                    tu = TargetUsage(self.raw_text(), offsets, self.time)
+                    tul.append(tu)
+                    n_usages = n_usages + 1
+            else:
+                token_features = self.tokens_by_feature(feat)
+                for idx, token in enumerate(token_features):
+                    if search_term.term == token:
+                        offsets = [0,0]
+                        if not idx == 0:
+                            offsets[0] = len(' '.join(token_features[:idx])) + 1
+                        offsets[1] = offsets[0] + len(token_features[idx])
+                        tu = TargetUsage(self.raw_text(), offsets, self.time)
+                        tul.append(tu)
+        return tul
 
     def __str__(self):
         return self._raw_text
@@ -70,80 +140,22 @@ class Corpus:
 
 
     def search(self,
-               words,
-               regex : bool = True,
-               word_feature: str | set = 'LEMMA',
-               search_func=None
-        ):
-        VALID_WORD_FEATURES = ['LEMMA', 'TOKEN', 'POS']
-        if type(word_feature) == str and word_feature in VALID_WORD_FEATURES:
-            word_feature = set({word_feature})
+               search_terms: List[ str | Pattern | SearchTerm ]
+               ) -> UsageDictionary:
 
-        if not word_feature.issubset(VALID_WORD_FEATURES):
-            raise ValueError("'word_feature' must be set to one of the following values: ", VALID_WORD_FEATURES)
-
-        for j,w in enumerate(words):
-            if type(w) == str:
-                words[j] = Target(w)
-
-        if search_func == None:
-            def search_func(word,line):
-                offsets = []
-                rex = re.compile(f'( |^)+{word}( |$)+',re.MULTILINE)
-                for fi in re.finditer(rex, line):
-                    s = line[fi.start():fi.end()].find(word)
-                    offsets.append([fi.start()+s, fi.start()+s+len(word)])
-                return offsets
-
-        usage_dictionary = {} # need to be saved in cache
-
-        if regex:
-            for word in words:
-                usage_dictionary[word.target] = TargetUsageList()
-
-            logging.info("Scanning the corpus..")
-            n_usages = 0
-
+        usage_dictionary = UsageDictionary()
+        n_usages = 0
+        for st in search_terms:
+            if not isinstance(st, SearchTerm):
+                st = SearchTerm(st, regex = True if isinstance(st, Pattern) else False)
+            tul = TargetUsageList()
+            usage_dictionary[st.term] = tul
             for line in self.line_iterator():
-                for word in words:
-                    for offsets in search_func(word.target, line.raw_text()):
-                        usage_dictionary[word.target].append(TargetUsage(line.raw_text(), offsets, self.time))
-                        n_usages = n_usages + 1
-            logging.info(f"{n_usages} usages found.")
-        else:
-
-            for word in words:
-                word_form = word.target if 'LEMMA' not in word_feature else word.lemma
-                usage_dictionary[word_form] = TargetUsageList()
-
-            logging.info("Scanning the corpus..")
-            n_usages = 0
-            for line in self.line_iterator():
-                line_tokens = line.tokens()
-                line_lemmas = line.lemmas() if 'LEMMA' in word_feature else None
-                line_pos_tags = line.pos_tags() if 'POS' in word_feature else None
-                for word_form in usage_dictionary:
-                    for j in range(len(line_tokens)):
-                        if (
-                            ('TOKEN' in word_feature and word_form == line_tokens[j]) or
-                            (line_lemmas and word_form == line_lemmas[j]) or
-                            (line_pos_tags and word_form == line_pos_tags[j])
-                        ):
-                            match = True
-                        else:
-                            match = False
-
-                        if match:
-                            offsets = [0,0]
-                            if not j == 0:
-                                offsets[0] = len(' '.join(line_tokens[:j])) + 1
-                            offsets[1] = offsets[0] + len(line_tokens[j])
-                            usage_dictionary[word_form].append(TargetUsage(' '.join(line.tokens()), offsets, self.time))
-                            n_usages = n_usages + 1
-
-            logging.info(f"{n_usages} usages found.")
+                match : List[TargetUsage] = line.search(st)
+                tul.extend(match)
+                n_usages += len(match)
+        logging.info(f"{n_usages} usages found.")
         return usage_dictionary
-    
 
     def tokenize(self, tokenizer = "trankit", split_sentences=False, batch_size=128):
         if tokenizer == "trankit":
