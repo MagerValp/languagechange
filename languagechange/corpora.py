@@ -1,8 +1,9 @@
+import bz2
 import os
 import gzip
 import random
 from languagechange.resource_manager import LanguageChange
-from langueagechange.search import SearchPattern, SearchTerm
+from languagechange.search import SearchTerm
 from languagechange.usages import Target, TargetUsage, TargetUsageList, UsageDictionary
 import re
 from languagechange.utils import LiteralTime, NumericalTime, TimeInterval
@@ -25,7 +26,8 @@ class Line:
                  pos_tags=None,
                  fname=None,
                  raw_lemma_text=None,
-                 raw_pos_text = None
+                 raw_pos_text = None,
+                 id = None
         ):
         self._raw_text = raw_text
         self._raw_lemma_text = raw_lemma_text
@@ -34,6 +36,7 @@ class Line:
         self._lemmas = lemmas
         self._pos_tags = pos_tags
         self._fname = fname
+        self._id = id
 
     def tokens(self):
         if not self._tokens == None:
@@ -51,9 +54,9 @@ class Line:
         if feat == 'token':
             return self.tokens()
         elif feat == 'lemma':
-            return self.lemmas
+            return self.lemmas()
         elif feat == 'pos':
-            return self.pos_tags
+            return self.pos_tags()
         else:
             raise ValueError(f"'{feat}' is not a valid word feature")
 
@@ -88,7 +91,7 @@ class Line:
         else:
             raise ValueError(f"'{feat}' is not a valid word feature")
 
-    def search(self, search_term : SearchTerm) -> List[TargetUsage]:
+    def search(self, search_term : SearchTerm, time = None) -> List[TargetUsage]:
         tul = TargetUsageList()
         for feat in search_term.word_feature:
             if search_term.regex:
@@ -102,7 +105,7 @@ class Line:
                         return offsets
                 raw_text_by_feature = self.raw_text_by_feature(feat)
                 for offsets in search_func(search_term.term, raw_text_by_feature):
-                    tu = TargetUsage(self.raw_text(), offsets, self.time)
+                    tu = TargetUsage(self.raw_text(), offsets, time, id=self._id)
                     tul.append(tu)
                     n_usages = n_usages + 1
             else:
@@ -113,7 +116,7 @@ class Line:
                         if not idx == 0:
                             offsets[0] = len(' '.join(token_features[:idx])) + 1
                         offsets[1] = offsets[0] + len(token_features[idx])
-                        tu = TargetUsage(self.raw_text(), offsets, self.time)
+                        tu = TargetUsage(self.raw_text(), offsets, time, id=self._id)
                         tul.append(tu)
         return tul
 
@@ -151,7 +154,7 @@ class Corpus:
             tul = TargetUsageList()
             usage_dictionary[st.term] = tul
             for line in self.line_iterator():
-                match : List[TargetUsage] = line.search(st)
+                match : List[TargetUsage] = line.search(st, time = self.time)
                 tul.extend(match)
                 n_usages += len(match)
         logging.info(f"{n_usages} usages found.")
@@ -755,37 +758,49 @@ class XMLCorpus(Corpus):
             data['tokens'] = tokens
             return data
 
+        def read_xml(source):
+            tokens = []
+            lemmas = []
+            parser = ET.iterparse(source, events=('start','end'))
+            parser = iter(parser)
+            event, _ = next(parser)
+            sentence_counter = 0
+            for event, elem in parser:
+                if elem.sourceline >= self.skip_lines:
+                    if elem.tag == self.sentence_tag:
+                        if event == 'start':
+                            tokens = []
+                            lemmas = []
+                            pos_tags = []
+                        # If the sentence has ended, create a new Line object with its content
+                        elif event == 'end':
+                            if tokens != []:
+                                data = get_data(tokens, lemmas, pos_tags)
+                                line_id = elem.get('id', sentence_counter)
+                                data['id'] = line_id
+                                yield Line(fname=fname, **data)
+                                elem.clear()
+                        sentence_counter += 1
+                    elif elem.tag == self.token_tag:
+                        if event == 'end':
+                            if self.is_lemmatized:
+                                lemma = self.get_attribute(elem, self.lemma_tag)
+                                lemmas.append(lemma)
+                            if self.is_pos_tagged:
+                                pos_tag = self.get_attribute(elem, self.pos_tag_tag)
+                                pos_tags.append(pos_tag)
+                            token = elem.text
+                            tokens.append(token)
+                            elem.clear()
+
         for fname in fnames:
             if fname.endswith('.xml'):
-                tokens = []
-                lemmas = []
-                parser = ET.iterparse(fname, events=('start','end'))
-                parser = iter(parser)
-                event, root = next(parser)
-                for event, elem in parser:
-                    if elem.sourceline >= self.skip_lines:
-                        if elem.tag == self.sentence_tag:
-                            if event == 'start':
-                                tokens = []
-                                lemmas = []
-                                pos_tags = []
-                            # If the sentence has ended, create a new Line object with its content
-                            elif event == 'end':
-                                if tokens != []:
-                                    data = get_data(tokens, lemmas, pos_tags)
-                                    yield Line(fname=fname, **data)
-                                    elem.clear()
-                        elif elem.tag == self.token_tag:
-                            if event == 'end':
-                                if self.is_lemmatized:
-                                    lemma = self.get_attribute(elem, self.lemma_tag)
-                                    lemmas.append(lemma)
-                                if self.is_pos_tagged:
-                                    pos_tag = self.get_attribute(elem, self.pos_tag_tag)
-                                    pos_tags.append(pos_tag)
-                                token = elem.text
-                                tokens.append(token)
-                                elem.clear()
+                for l in read_xml(fname):
+                    yield l
+            elif fname.endswith('.xml.bz2'):
+                with bz2.open(fname, 'r') as f:
+                    for l in read_xml(f):
+                        yield l
             else:
                 raise Exception('Format not recognized')
 

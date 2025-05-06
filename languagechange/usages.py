@@ -1,9 +1,11 @@
 import enum
 import pickle
-from pathlib import Path
+import logging
 import os
 
 import jsonlines
+
+from pathlib import Path
 
 from languagechange.utils import Time
 
@@ -33,10 +35,11 @@ class Target:
 
 
 class TargetUsage:
-    def __init__(self, text: str, offsets: str, time: Time = None, **args):
+    def __init__(self, text: str, offsets: str, time: Time = None, **kwargs):
         self.text_ = text
         self.offsets = offsets
         self.time = time
+        self.__dict__.update(kwargs)
 
     def text(self):
         return self.text_
@@ -96,5 +99,7 @@ class UsageDictionary(dict):
     def save(self, path):
         Path(path).mkdir(parents=True, exist_ok=True)
         for k in self:
-            with jsonlines.open(f"{path}/{k}_usages.jsonl", 'w') as writer:
+            output_fn = f"{path}/{k}_usages.jsonl"
+            with jsonlines.open(output_fn, 'w') as writer:
                 writer.write_all(self[k].to_dict())
+                logging.info(f"Usages written to {output_fn}")
