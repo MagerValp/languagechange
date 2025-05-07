@@ -91,7 +91,14 @@ class Line:
         else:
             raise ValueError(f"'{feat}' is not a valid word feature")
 
-    def search(self, search_term : SearchTerm, time = None) -> List[TargetUsage]:
+    def search(self, search_term : SearchTerm, time = None) -> TargetUsageList:
+        """
+            Searches the line given a search_term.
+
+            Args:
+                search_term : SearchTerm
+            Returns: A TargetUsageList of all matches.
+        """
         tul = TargetUsageList()
         for feat in search_term.word_feature:
             if search_term.regex:
@@ -145,6 +152,17 @@ class Corpus:
     def search(self,
                search_terms: List[ str | Pattern | SearchTerm ]
                ) -> UsageDictionary:
+        """
+            Searches through the corpora by calling Line.search() on all lines.
+
+            Args:
+                search_terms : List[ str | Pattern | SearchTerm ]
+                    If a search term is str or Pattern it is converted
+                    to a SearchTerm and matches tokens only
+                    SearchTerm(word_feature = 'token').
+
+            Returns: A UsageDictionary containing all search results for each search term.
+        """
 
         usage_dictionary = UsageDictionary()
         n_usages = 0
@@ -929,22 +947,27 @@ class HistoricalCorpus(SortedKeyList):
             except:
                 logging.error(f"Could not get lines from {corpus.name}.")
 
-    def search(self, words : List[str], strategy='REGEX', search_func=None, index_by_corpus=False):
+
+    def search(self, search_terms : List[ str | Pattern | SearchTerm ], index_by_corpus=False):
         """
             Searches through all of the corpora by calling search() for each of them.
 
             Args:
-                words ([str]): a list of the words to be searched, passed to Corpus.search().
-                strategy (str|[str], default='REGEX'): the strategy to use when searching, passed to Corpus.search().
-                search_func (function, default=None): a custom search function, passed to Corpus.search().
-                index_by_corpus (bool, default=False): decides whether the usages for a given word should be a dictionary, with keys as the corpus names and values as lists of usages, or a list of all usages across corpora.
+                search_terms : List[ str | Pattern | SearchTerm ]
+                    If search term is str or Pattern it is converted
+                    to a SearchTerm and matches tokens only
+                    SearchTerm(word_feature = 'token').
+                index_by_corpus : bool, default False
+                    decides whether the usages for a given word should be a dictionary,
+                    with keys as the corpus names and values as lists of usages, or a list
+                    of all usages across corpora.
 
             Returns: a dictionary containing all search results from the included corpora.
         """
         usages = {}
         for corpus in self:
             try:
-                usage_dict = corpus.search(words, strategy=strategy, search_func=search_func)
+                usage_dict = corpus.search(search_terms)
             except:
                 logging.error(f"Could not search through {corpus.name}.")
                 continue
