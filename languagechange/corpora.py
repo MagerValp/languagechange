@@ -1,18 +1,17 @@
 import bz2
-import os
 import gzip
-import random
-from languagechange.resource_manager import LanguageChange
-from languagechange.search import SearchTerm
-from languagechange.usages import Target, TargetUsage, TargetUsageList, UsageDictionary
-import re
-from languagechange.utils import LiteralTime, NumericalTime, TimeInterval
-from sortedcontainers import SortedKeyList
 import logging
+import os
+import re
+from typing import List, Pattern, Self, Union
+
 import lxml.etree as ET
 import trankit
-from typing import Callable, List, Union, Self, Pattern
-import datetime
+from languagechange.resource_manager import LanguageChange
+from languagechange.search import SearchTerm
+from languagechange.usages import TargetUsage, TargetUsageList, UsageDictionary
+from languagechange.utils import LiteralTime
+from sortedcontainers import SortedKeyList
 
 logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
 
@@ -144,10 +143,8 @@ class Corpus:
             self.time = time
         self.skip_lines = skip_lines
 
-
     def set_sentences_iterator(self, sentences):
         self.sentences_iterator = sentences
-
 
     def search(self,
                search_terms: List[ str | Pattern | SearchTerm ]
@@ -223,7 +220,6 @@ class Corpus:
                             yield line
                 except Exception:
                     logging.error(f"Could not use tokenizer {tokenizer} directly as a function to tokenize.")
-
 
     def lemmatize(self, lemmatizer = "trankit", pretokenized = False, tokenize = False, split_sentences = False, batch_size=128):
         if lemmatizer == "trankit":
@@ -308,7 +304,6 @@ class Corpus:
                                 yield line
                 except Exception:
                     logging.error(f"Could not use method {lemmatizer} directly as a function to lemmatize.")
-    
 
     def pos_tagging(self, pos_tagger = "trankit", pretokenized = False, tokenize=False, split_sentences = False, batch_size=128):
         if pos_tagger == "trankit":
@@ -392,7 +387,6 @@ class Corpus:
                 except Exception:
                     logging.error(f"Could not use method {pos_tagger} directly as a function to perform POS tagging.")
 
-
     def tokens_lemmas_pos_tags(self, nlp_model="trankit", tokens=True, split_sentences = False, batch_size=128):
         if nlp_model == "trankit":
             p = trankit.Pipeline(self.language)
@@ -434,7 +428,6 @@ class Corpus:
                 if len(texts) != 0:
                     for line in process_texts(texts):
                         yield line
-
 
     # preliminary function
     def segment_sentences(self, segmentizer = "trankit", batch_size=128):
@@ -507,11 +500,9 @@ class Corpus:
                 else:
                     iterate = False
 
-
     def save(self):
         lc = LanguageChange()
-        path = lc.save_resource('corpus',f'{self.language} corpora',self.name)
-
+        lc.save_resource('corpus',f'{self.language} corpora',self.name)
 
     def save_tokenized_corpora(corpora : Union[Self, List[Self]], tokens = True, lemmas = False, pos = False, save_format = 'linebyline', file_specification = None, file_ending = ".txt", tokenizer="trankit", lemmatizer="trankit", pos_tagger="trankit", split_sentences = True, batch_size=128):
         if not type(corpora) is list:
@@ -614,7 +605,6 @@ class LinebyLineCorpus(Corpus):
             else:
                 self.is_lemmatized = False
 
-
     def line_iterator(self):
         
         if os.path.isdir(self.path):
@@ -660,7 +650,6 @@ class VerticalCorpus(Corpus):
         self.sentence_separator = sentence_separator
         self.field_separator = field_separator
         self.field_map = field_map
-
 
     def line_iterator(self):
         
@@ -822,7 +811,6 @@ class XMLCorpus(Corpus):
             else:
                 raise Exception('Format not recognized')
 
-    
     # Cast to a LineByLine corpus and save the result in the path specified in there
     def cast_to_linebyline(self, linebyline_corpus : LinebyLineCorpus):
         savepath = linebyline_corpus.path
@@ -845,7 +833,6 @@ class XMLCorpus(Corpus):
             else:
                 for line in self.line_iterator():
                     f.write(line.raw_text()+'\n')  # cache needed here
-
 
     def cast_to_vertical(self, vertical_corpus : VerticalCorpus):
         savepath = vertical_corpus.path
@@ -870,7 +857,6 @@ class SprakBankenCorpus(XMLCorpus):
 
     def __init__(self, path, sentence_tag='sentence',token_tag='token', is_lemmatized=True, lemma_tag='lemma', is_pos_tagged=True, pos_tag_tag='pos', **args):
         super().__init__(path, sentence_tag, token_tag, is_lemmatized, lemma_tag, is_pos_tagged, pos_tag_tag, **args)
-
     
     def get_attribute(self, tag, attribute):
         content = tag.attrib[attribute]
@@ -882,7 +868,6 @@ class SprakBankenCorpus(XMLCorpus):
             else:
                 return content
         return tag.text
-
 
 
 class HistoricalCorpus(SortedKeyList):
@@ -934,7 +919,6 @@ class HistoricalCorpus(SortedKeyList):
             logging.error("'corpora' needs to be either a string or a list of Corpus objects.")
             raise Exception
         super().__init__(corpora, key)
-        
 
     def line_iterator(self):
         """
@@ -946,7 +930,6 @@ class HistoricalCorpus(SortedKeyList):
                     yield line
             except:
                 logging.error(f"Could not get lines from {corpus.name}.")
-
 
     def search(self, search_terms : List[ str | Pattern | SearchTerm ], index_by_corpus=False):
         """
