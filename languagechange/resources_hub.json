@@ -64,6 +64,23 @@
       "ZH":{
         "1.0.0": "https://zenodo.org/records/10023263/files/chiwug.zip"
       }
+    },
+    "WiC":{
+      "WiC":{
+        "1.0": "https://pilehvar.github.io/wic/package/WiC_dataset.zip"
+      },
+      "XL-WiC":{
+        "1.0": "https://pilehvar.github.io/xlwic/data/xlwic_datasets.zip"
+      },
+      "AM2iCo":{
+        "no-version": "https://github.com/cambridgeltl/AM2iCo/archive/refs/heads/master.zip"
+      },
+      "TempoWiC":{
+        "no-version": "https://github.com/cardiffnlp/TempoWiC/archive/refs/heads/main.zip"
+      },
+      "MCL-WiC":{
+        "no-version": "https://github.com/SapienzaNLP/mcl-wic/archive/refs/heads/master.zip"
+      }
     }
   }
 }

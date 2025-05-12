@@ -1,6 +1,6 @@
 from typing import List, Union
 import numpy as np
-from languagechange.models.change.metrics import *
+from languagechange.models.change.metrics import GradedChange, APD, PRT, PJSD
 import logging
 
 

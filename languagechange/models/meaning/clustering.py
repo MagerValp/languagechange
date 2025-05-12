@@ -369,3 +369,5 @@ class APosterioriaffinityPropagation(ClusterMixin, BaseEstimator):
                 values = [v for v in self.memory_[i][k] if v not in self.memory_[i - 1].keys()]
                 tot += len(values)
         return tot
+    
+    
