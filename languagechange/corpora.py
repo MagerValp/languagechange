@@ -26,7 +26,7 @@ class Line:
                  fname=None,
                  raw_lemma_text=None,
                  raw_pos_text = None,
-                 id = None
+                 **kwargs,
         ):
         self._raw_text = raw_text
         self._raw_lemma_text = raw_lemma_text
@@ -35,7 +35,7 @@ class Line:
         self._lemmas = lemmas
         self._pos_tags = pos_tags
         self._fname = fname
-        self._id = id
+        self.__dict__.update(kwargs)
 
     def tokens(self):
         if not self._tokens == None:
@@ -98,6 +98,7 @@ class Line:
                 search_term : SearchTerm
             Returns: A TargetUsageList of all matches.
         """
+        time  = self.date if self.date else time
         tul = TargetUsageList()
         for feat in search_term.word_feature:
             if search_term.regex:
@@ -111,7 +112,7 @@ class Line:
                         return offsets
                 raw_text_by_feature = self.raw_text_by_feature(feat)
                 for offsets in search_func(search_term.term, raw_text_by_feature):
-                    tu = TargetUsage(self.raw_text(), offsets, time, id=self._id)
+                    tu = TargetUsage(self.raw_text(), offsets, time, id=self.id)
                     tul.append(tu)
                     n_usages = n_usages + 1
             else:
@@ -122,7 +123,7 @@ class Line:
                         if not idx == 0:
                             offsets[0] = len(' '.join(token_features[:idx])) + 1
                         offsets[1] = offsets[0] + len(token_features[idx])
-                        tu = TargetUsage(self.raw_text(), offsets, time, id=self._id)
+                        tu = TargetUsage(self.raw_text(), offsets, time, id=self.id)
                         tul.append(tu)
         return tul
 
@@ -705,7 +706,7 @@ class VerticalCorpus(Corpus):
 # Supports only tokenized corpora so far.
 class XMLCorpus(Corpus):
 
-    def __init__(self, path, sentence_tag='sentence',token_tag='token', is_lemmatized=False, lemma_tag=None, is_pos_tagged=False, pos_tag_tag=None, **args):
+    def __init__(self, path, sentence_tag='sentence', token_tag='token', is_lemmatized=False, lemma_tag=None, is_pos_tagged=False, pos_tag_tag=None, text_tag='text', **args):
         if not 'name' in args:
             name = path
         super().__init__(name, **args)
@@ -743,6 +744,7 @@ class XMLCorpus(Corpus):
 
         self.sentence_tag = sentence_tag
         self.token_tag = token_tag
+        self.text_tag = text_tag
 
     
     def get_attribute(self, tag, attribute):
@@ -774,6 +776,8 @@ class XMLCorpus(Corpus):
             sentence_counter = 0
             for event, elem in parser:
                 if elem.sourceline >= self.skip_lines:
+                    if elem.tag == self.text_tag:
+                        date = elem.get('date')
                     if elem.tag == self.sentence_tag:
                         if event == 'start':
                             tokens = []
@@ -783,6 +787,7 @@ class XMLCorpus(Corpus):
                         elif event == 'end':
                             if tokens != []:
                                 data = get_data(tokens, lemmas, pos_tags)
+                                data['date'] = date
                                 line_id = elem.get('id', sentence_counter)
                                 data['id'] = line_id
                                 yield Line(fname=fname, **data)
