@@ -121,8 +121,8 @@ class Line:
                     if search_term.term == token:
                         offsets = [0,0]
                         if not idx == 0:
-                            offsets[0] = len(' '.join(token_features[:idx])) + 1
-                        offsets[1] = offsets[0] + len(token_features[idx])
+                            offsets[0] = len(' '.join(self.tokens()[:idx])) + 1
+                        offsets[1] = offsets[0] + len(self.tokens()[idx])
                         tu = TargetUsage(self.raw_text(), offsets, time, id=self.id)
                         tul.append(tu)
         return tul
