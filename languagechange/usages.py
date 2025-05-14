@@ -1,7 +1,12 @@
 import enum
 import pickle
-from pathlib import Path
+import logging
 import os
+
+import jsonlines
+
+from pathlib import Path
+
 from languagechange.utils import Time
 
 
@@ -10,6 +15,7 @@ class POS(enum.Enum):
    VERB = 2
    ADJECTIVE = 3
    ADVERB = 4
+
 
 class Target:
     def __init__(self, target : str):
@@ -27,11 +33,13 @@ class Target:
     def __hash__(self):
         return hash(self.target)
 
+
 class TargetUsage:
-    def __init__(self, text: str, offsets: str, time: Time = None, **args):
+    def __init__(self, text: str, offsets: str, time: Time = None, **kwargs):
         self.text_ = text
         self.offsets = offsets
         self.time = time
+        self.__dict__.update(kwargs)
 
     def text(self):
         return self.text_
@@ -45,11 +53,17 @@ class TargetUsage:
     def time(self):
         return self.time
 
+    def to_dict(self):
+        d = self.__dict__
+        d['time'] = str(d['time'])
+        return d
+
     def __getitem__(self,item):
         return self.text_[item]
 
     def __str__(self):
         return self.text_
+
 
 class DWUGUsage(TargetUsage):
 
@@ -75,3 +89,17 @@ class TargetUsageList(list):
 
     def time_axis(self):
         return [usage.time for usage in self]
+
+    def to_dict(self):
+        return [tu.to_dict() for tu in self]
+
+
+class UsageDictionary(dict):
+
+    def save(self, path):
+        Path(path).mkdir(parents=True, exist_ok=True)
+        for k in self:
+            output_fn = f"{path}/{k}_usages.jsonl"
+            with jsonlines.open(output_fn, 'w') as writer:
+                writer.write_all(self[k].to_dict())
+                logging.info(f"Usages written to {output_fn}")

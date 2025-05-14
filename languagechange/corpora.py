@@ -1,28 +1,41 @@
-import os
+import bz2
 import gzip
-import random
-from languagechange.resource_manager import LanguageChange
-from languagechange.usages import Target, TargetUsage, TargetUsageList
-import re
-from languagechange.utils import LiteralTime, NumericalTime, TimeInterval
-from sortedcontainers import SortedKeyList
 import logging
+import os
+import re
+from typing import List, Pattern, Self, Union
+
 import lxml.etree as ET
 import trankit
-from typing import List, Union, Self
-import datetime
+from languagechange.resource_manager import LanguageChange
+from languagechange.search import SearchTerm
+from languagechange.usages import TargetUsage, TargetUsageList, UsageDictionary
+from languagechange.utils import LiteralTime
+from sortedcontainers import SortedKeyList
 
 logging.basicConfig(format='%(asctime)s : %(levelname)s : %(message)s', level=logging.INFO)
 
 
 class Line:
 
-    def __init__(self, raw_text=None, tokens=None, lemmas=None, pos_tags=None, fname=None):
+    def __init__(self,
+                 raw_text=None,
+                 tokens=None,
+                 lemmas=None,
+                 pos_tags=None,
+                 fname=None,
+                 raw_lemma_text=None,
+                 raw_pos_text = None,
+                 **kwargs,
+        ):
         self._raw_text = raw_text
+        self._raw_lemma_text = raw_lemma_text
+        self._raw_pos_text = raw_pos_text
         self._tokens = tokens
         self._lemmas = lemmas
         self._pos_tags = pos_tags
         self._fname = fname
+        self.__dict__.update(kwargs)
 
     def tokens(self):
         if not self._tokens == None:
@@ -36,6 +49,16 @@ class Line:
     def pos_tags(self):
         return self._pos_tags
 
+    def tokens_by_feature(self, feat = str):
+        if feat == 'token':
+            return self.tokens()
+        elif feat == 'lemma':
+            return self.lemmas()
+        elif feat == 'pos':
+            return self.pos_tags()
+        else:
+            raise ValueError(f"'{feat}' is not a valid word feature")
+
     def raw_text(self):
         if not self._raw_text == None:
             return self._raw_text
@@ -46,6 +69,63 @@ class Line:
                 return ' '.join(self._lemmas)
             else:
                 raise Exception('No valid data in Line')
+
+    def raw_lemma_text(self):
+        if not self._raw_lemmas == None:
+            return self._raw_lemmas
+        return ' '.join(self._lemmas)
+
+    def raw_pos_text(self):
+        if not self._raw_pos_text == None:
+            return self._raw_pos_text
+        return ' '.join(self._raw_pos_text)
+
+    def raw_text_by_feature(self, feat = 'token'):
+        if feat == 'token':
+            return self.raw_text()
+        elif feat == 'lemma':
+            return self.raw_lemma_text()
+        elif feat == 'pos':
+            return self.raw_pos_text()
+        else:
+            raise ValueError(f"'{feat}' is not a valid word feature")
+
+    def search(self, search_term : SearchTerm, time = None) -> TargetUsageList:
+        """
+            Searches the line given a search_term.
+
+            Args:
+                search_term : SearchTerm
+            Returns: A TargetUsageList of all matches.
+        """
+        time  = self.date if self.date else time
+        tul = TargetUsageList()
+        for feat in search_term.word_feature:
+            if search_term.regex:
+                if search_term.search_func:
+                    def search_func(word, line):
+                        offsets = []
+                        rex = re.compile(f'( |^)+{word}( |$)+',re.MULTILINE)
+                        for fi in re.finditer(rex, line):
+                            s = line[fi.start():fi.end()].find(word)
+                            offsets.append([fi.start()+s, fi.start()+s+len(word)])
+                        return offsets
+                raw_text_by_feature = self.raw_text_by_feature(feat)
+                for offsets in search_func(search_term.term, raw_text_by_feature):
+                    tu = TargetUsage(self.raw_text(), offsets, time, id=self.id)
+                    tul.append(tu)
+                    n_usages = n_usages + 1
+            else:
+                token_features = self.tokens_by_feature(feat)
+                for idx, token in enumerate(token_features):
+                    if search_term.term == token:
+                        offsets = [0,0]
+                        if not idx == 0:
+                            offsets[0] = len(' '.join(self.tokens()[:idx])) + 1
+                        offsets[1] = offsets[0] + len(self.tokens()[idx])
+                        tu = TargetUsage(self.raw_text(), offsets, time, id=self.id)
+                        tul.append(tu)
+        return tul
 
     def __str__(self):
         return self._raw_text
@@ -64,76 +144,37 @@ class Corpus:
             self.time = time
         self.skip_lines = skip_lines
 
-
     def set_sentences_iterator(self, sentences):
         self.sentences_iterator = sentences
 
+    def search(self,
+               search_terms: List[ str | Pattern | SearchTerm ]
+               ) -> UsageDictionary:
+        """
+            Searches through the corpora by calling Line.search() on all lines.
 
-    def search(self, words, strategy='REGEX', search_func=None):
+            Args:
+                search_terms : List[ str | Pattern | SearchTerm ]
+                    If a search term is str or Pattern it is converted
+                    to a SearchTerm and matches tokens only
+                    SearchTerm(word_feature = 'token').
 
-        for j,w in enumerate(words):
-            if type(w) == str:
-                words[j] = Target(w)
+            Returns: A UsageDictionary containing all search results for each search term.
+        """
 
-        if search_func == None:
-            def search_func(word,line):
-                offsets = []
-                rex = re.compile(f'( |^)+{word}( |$)+',re.MULTILINE)
-                for fi in re.finditer(rex, line):
-                    s = line[fi.start():fi.end()].find(word)
-                    offsets.append([fi.start()+s, fi.start()+s+len(word)])
-                return offsets
-
-        usage_dictionary = {} # need to be saved in cache
-
-        if strategy == 'REGEX':
-
-            for word in words:
-                usage_dictionary[word.target] = TargetUsageList()
-
-            logging.info("Scanning the corpus..")
-            n_usages = 0
-
+        usage_dictionary = UsageDictionary()
+        n_usages = 0
+        for st in search_terms:
+            if not isinstance(st, SearchTerm):
+                st = SearchTerm(st, regex = True if isinstance(st, Pattern) else False)
+            tul = TargetUsageList()
+            usage_dictionary[st.term] = tul
             for line in self.line_iterator():
-                for word in words:
-                    for offsets in search_func(word.target, line.raw_text()):
-                        usage_dictionary[word.target].append(TargetUsage(line.raw_text(), offsets, self.time))
-                        n_usages = n_usages + 1
-
-            logging.info(f"{n_usages} usages found.")
-        else:
-
-            if type(strategy) == str:
-                strategy = set([s.strip().upper() for s in strategy.split('+')])
-            elif type(strategy) == list:
-                strategy = set([s.upper() for s in strategy])
-
-            for word in words:
-                word_form = word.target if 'INFLECTED' in strategy else word.lemma
-                usage_dictionary[word_form] = TargetUsageList()
-
-            logging.info("Scanning the corpus..")
-            n_usages = 0
-
-            for line in self.line_iterator():
-                line_tokens = line.tokens() if 'INFLECTED' in strategy else line.lemmas()
-                if line_tokens == None:
-                    raise Exception(f"Some of the required features {strategy} are not available for Corpus {self.name}")
-                for j,token in enumerate(line_tokens):
-                    for word in words:
-                        word_form = word.target if 'INFLECTED' in strategy else word.lemma
-                        if word_form == token:
-                            if (not 'POS' in strategy) or ('POS' in strategy and word_form.pos == line.pos[j]):
-                                offsets = [0,0]
-                                if not j == 0:
-                                    offsets[0] = len(' '.join(line.tokens()[:j])) + 1
-                                offsets[1] = offsets[0] + len(line.tokens()[j])
-                                usage_dictionary[word_form].append(TargetUsage(' '.join(line.tokens()), offsets, self.time))
-                                n_usages = n_usages + 1
-
-            logging.info(f"{n_usages} usages found.")
+                match : List[TargetUsage] = line.search(st, time = self.time)
+                tul.extend(match)
+                n_usages += len(match)
+        logging.info(f"{n_usages} usages found.")
         return usage_dictionary
-    
 
     def tokenize(self, tokenizer = "trankit", split_sentences=False, batch_size=128):
         if tokenizer == "trankit":
@@ -180,7 +221,6 @@ class Corpus:
                             yield line
                 except Exception:
                     logging.error(f"Could not use tokenizer {tokenizer} directly as a function to tokenize.")
-
 
     def lemmatize(self, lemmatizer = "trankit", pretokenized = False, tokenize = False, split_sentences = False, batch_size=128):
         if lemmatizer == "trankit":
@@ -265,7 +305,6 @@ class Corpus:
                                 yield line
                 except Exception:
                     logging.error(f"Could not use method {lemmatizer} directly as a function to lemmatize.")
-    
 
     def pos_tagging(self, pos_tagger = "trankit", pretokenized = False, tokenize=False, split_sentences = False, batch_size=128):
         if pos_tagger == "trankit":
@@ -349,7 +388,6 @@ class Corpus:
                 except Exception:
                     logging.error(f"Could not use method {pos_tagger} directly as a function to perform POS tagging.")
 
-
     def tokens_lemmas_pos_tags(self, nlp_model="trankit", tokens=True, split_sentences = False, batch_size=128):
         if nlp_model == "trankit":
             p = trankit.Pipeline(self.language)
@@ -391,7 +429,6 @@ class Corpus:
                 if len(texts) != 0:
                     for line in process_texts(texts):
                         yield line
-
 
     # preliminary function
     def segment_sentences(self, segmentizer = "trankit", batch_size=128):
@@ -464,11 +501,9 @@ class Corpus:
                 else:
                     iterate = False
 
-
     def save(self):
         lc = LanguageChange()
-        path = lc.save_resource('corpus',f'{self.language} corpora',self.name)
-
+        lc.save_resource('corpus',f'{self.language} corpora',self.name)
 
     def save_tokenized_corpora(corpora : Union[Self, List[Self]], tokens = True, lemmas = False, pos = False, save_format = 'linebyline', file_specification = None, file_ending = ".txt", tokenizer="trankit", lemmatizer="trankit", pos_tagger="trankit", split_sentences = True, batch_size=128):
         if not type(corpora) is list:
@@ -571,7 +606,6 @@ class LinebyLineCorpus(Corpus):
             else:
                 self.is_lemmatized = False
 
-
     def line_iterator(self):
         
         if os.path.isdir(self.path):
@@ -617,7 +651,6 @@ class VerticalCorpus(Corpus):
         self.sentence_separator = sentence_separator
         self.field_separator = field_separator
         self.field_map = field_map
-
 
     def line_iterator(self):
         
@@ -673,7 +706,7 @@ class VerticalCorpus(Corpus):
 # Supports only tokenized corpora so far.
 class XMLCorpus(Corpus):
 
-    def __init__(self, path, sentence_tag='sentence',token_tag='token', is_lemmatized=False, lemma_tag=None, is_pos_tagged=False, pos_tag_tag=None, **args):
+    def __init__(self, path, sentence_tag='sentence', token_tag='token', is_lemmatized=False, lemma_tag=None, is_pos_tagged=False, pos_tag_tag=None, text_tag='text', **args):
         if not 'name' in args:
             name = path
         super().__init__(name, **args)
@@ -711,6 +744,7 @@ class XMLCorpus(Corpus):
 
         self.sentence_tag = sentence_tag
         self.token_tag = token_tag
+        self.text_tag = text_tag
 
     
     def get_attribute(self, tag, attribute):
@@ -733,41 +767,55 @@ class XMLCorpus(Corpus):
             data['tokens'] = tokens
             return data
 
+        def read_xml(source):
+            tokens = []
+            lemmas = []
+            parser = ET.iterparse(source, events=('start','end'))
+            parser = iter(parser)
+            event, _ = next(parser)
+            sentence_counter = 0
+            for event, elem in parser:
+                if elem.sourceline >= self.skip_lines:
+                    if elem.tag == self.text_tag:
+                        date = elem.get('date')
+                    if elem.tag == self.sentence_tag:
+                        if event == 'start':
+                            tokens = []
+                            lemmas = []
+                            pos_tags = []
+                        # If the sentence has ended, create a new Line object with its content
+                        elif event == 'end':
+                            if tokens != []:
+                                data = get_data(tokens, lemmas, pos_tags)
+                                data['date'] = date
+                                line_id = elem.get('id', sentence_counter)
+                                data['id'] = line_id
+                                yield Line(fname=fname, **data)
+                                elem.clear()
+                        sentence_counter += 1
+                    elif elem.tag == self.token_tag:
+                        if event == 'end':
+                            if self.is_lemmatized:
+                                lemma = self.get_attribute(elem, self.lemma_tag)
+                                lemmas.append(lemma)
+                            if self.is_pos_tagged:
+                                pos_tag = self.get_attribute(elem, self.pos_tag_tag)
+                                pos_tags.append(pos_tag)
+                            token = elem.text
+                            tokens.append(token)
+                            elem.clear()
+
         for fname in fnames:
             if fname.endswith('.xml'):
-                tokens = []
-                lemmas = []
-                parser = ET.iterparse(fname, events=('start','end'))
-                parser = iter(parser)
-                event, root = next(parser)
-                for event, elem in parser:
-                    if elem.sourceline >= self.skip_lines:
-                        if elem.tag == self.sentence_tag:
-                            if event == 'start':
-                                tokens = []
-                                lemmas = []
-                                pos_tags = []
-                            # If the sentence has ended, create a new Line object with its content
-                            elif event == 'end':
-                                if tokens != []:
-                                    data = get_data(tokens, lemmas, pos_tags)
-                                    yield Line(fname=fname, **data)
-                                    elem.clear()
-                        elif elem.tag == self.token_tag:
-                            if event == 'end':
-                                if self.is_lemmatized:
-                                    lemma = self.get_attribute(elem, self.lemma_tag)
-                                    lemmas.append(lemma)
-                                if self.is_pos_tagged:
-                                    pos_tag = self.get_attribute(elem, self.pos_tag_tag)
-                                    pos_tags.append(pos_tag)
-                                token = elem.text
-                                tokens.append(token)
-                                elem.clear()
+                for l in read_xml(fname):
+                    yield l
+            elif fname.endswith('.xml.bz2'):
+                with bz2.open(fname, 'r') as f:
+                    for l in read_xml(f):
+                        yield l
             else:
                 raise Exception('Format not recognized')
 
-    
     # Cast to a LineByLine corpus and save the result in the path specified in there
     def cast_to_linebyline(self, linebyline_corpus : LinebyLineCorpus):
         savepath = linebyline_corpus.path
@@ -790,7 +838,6 @@ class XMLCorpus(Corpus):
             else:
                 for line in self.line_iterator():
                     f.write(line.raw_text()+'\n')  # cache needed here
-
 
     def cast_to_vertical(self, vertical_corpus : VerticalCorpus):
         savepath = vertical_corpus.path
@@ -815,7 +862,6 @@ class SprakBankenCorpus(XMLCorpus):
 
     def __init__(self, path, sentence_tag='sentence',token_tag='token', is_lemmatized=True, lemma_tag='lemma', is_pos_tagged=True, pos_tag_tag='pos', **args):
         super().__init__(path, sentence_tag, token_tag, is_lemmatized, lemma_tag, is_pos_tagged, pos_tag_tag, **args)
-
     
     def get_attribute(self, tag, attribute):
         content = tag.attrib[attribute]
@@ -827,7 +873,6 @@ class SprakBankenCorpus(XMLCorpus):
             else:
                 return content
         return tag.text
-
 
 
 class HistoricalCorpus(SortedKeyList):
@@ -879,7 +924,6 @@ class HistoricalCorpus(SortedKeyList):
             logging.error("'corpora' needs to be either a string or a list of Corpus objects.")
             raise Exception
         super().__init__(corpora, key)
-        
 
     def line_iterator(self):
         """
@@ -892,22 +936,26 @@ class HistoricalCorpus(SortedKeyList):
             except:
                 logging.error(f"Could not get lines from {corpus.name}.")
 
-    def search(self, words : List[str], strategy='REGEX', search_func=None, index_by_corpus=False):
+    def search(self, search_terms : List[ str | Pattern | SearchTerm ], index_by_corpus=False):
         """
             Searches through all of the corpora by calling search() for each of them.
 
             Args:
-                words ([str]): a list of the words to be searched, passed to Corpus.search().
-                strategy (str|[str], default='REGEX'): the strategy to use when searching, passed to Corpus.search().
-                search_func (function, default=None): a custom search function, passed to Corpus.search().
-                index_by_corpus (bool, default=False): decides whether the usages for a given word should be a dictionary, with keys as the corpus names and values as lists of usages, or a list of all usages across corpora.
+                search_terms : List[ str | Pattern | SearchTerm ]
+                    If search term is str or Pattern it is converted
+                    to a SearchTerm and matches tokens only
+                    SearchTerm(word_feature = 'token').
+                index_by_corpus : bool, default False
+                    decides whether the usages for a given word should be a dictionary,
+                    with keys as the corpus names and values as lists of usages, or a list
+                    of all usages across corpora.
 
             Returns: a dictionary containing all search results from the included corpora.
         """
         usages = {}
         for corpus in self:
             try:
-                usage_dict = corpus.search(words, strategy=strategy, search_func=search_func)
+                usage_dict = corpus.search(search_terms)
             except:
                 logging.error(f"Could not search through {corpus.name}.")
                 continue
