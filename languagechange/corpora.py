@@ -661,7 +661,7 @@ class VerticalCorpus(Corpus):
 
         def get_data(line):
             data = {}
-            splitted_line = [vertical_line.split(self.field_separator) for vertical_line in line]
+            splitted_line = [vertical_line.strip('\n').split(self.field_separator) for vertical_line in line]
             raw_text = [vertical_line[self.field_map['token']] for vertical_line in splitted_line]
             data['raw_text'] = ' '.join(raw_text)
             data['tokens'] = raw_text
