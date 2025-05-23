@@ -1,5 +1,5 @@
 from languagechange.models.meaning.clustering import Clustering, APosterioriaffinityPropagation
-from languagechange.models.change import TimeSeries
+from languagechange.models.change.timeseries import TimeSeries
 import numpy as np
 from typing import List, Union
 
