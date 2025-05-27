@@ -771,8 +771,6 @@ class XMLCorpus(Corpus):
             tokens = []
             lemmas = []
             parser = ET.iterparse(source, events=('start','end'))
-            parser = iter(parser)
-            event, _ = next(parser)
             sentence_counter = 0
             for event, elem in parser:
                 if elem.sourceline >= self.skip_lines:
@@ -804,6 +802,10 @@ class XMLCorpus(Corpus):
                             token = elem.text
                             tokens.append(token)
                             elem.clear()
+                    else:
+                        if event == 'end':
+                            elem.clear()
+
 
         for fname in fnames:
             if fname.endswith('.xml'):
