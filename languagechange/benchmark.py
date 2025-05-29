@@ -13,7 +13,7 @@ import zipfile
 import random
 import numpy as np
 from scipy.stats import spearmanr
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, f1_score
 from typing import List, Dict
 
 
@@ -204,8 +204,14 @@ class DWUG(Benchmark):
     def get_stats_groupings(self):
         return self.get_stats_groupings
     
-    def cast_to_WiC(self):
-        wic = WiC()
+    def cast_to_WiC(self, only_between_groups = False, remove_outliers = True, exclude_non_judgments = True, transform_labels = None):
+        """
+            Casts the DWUG to a Word in Context (WiC) dataset.
+
+            Args:
+                only_between_groups (bool) : if true, select only examples where the two usages belong to different groupings.
+        """
+        wic = WiC(language=self.language)
         data = []
         for word in self.stats_groupings:
             excluded_instances = set()
@@ -214,19 +220,21 @@ class DWUG(Benchmark):
                 for line in islice(f, 1, None):
                     line = line.replace('\n','').split('\t')
                     id, label = line
-                    if int(label) == -1:
+                    if remove_outliers and int(label) == -1:
                         excluded_instances.add(id)
 
             usages_by_key = {}
             with open(os.path.join(self.home_path,'data',word,'uses.csv')) as f:
                 for line in islice(f, 1, None):
                     line = line.replace('\n','').split('\t')
+                    lemma = line[0]
+                    grouping = line[3]
                     id = line[4]
                     if not id in excluded_instances:
                         context_tokenized = line[9]
                         word_index = int(line[10])
                         start, end = wic.get_start_end(context_tokenized, word_index)
-                        usages_by_key[id] = {'text':context_tokenized, 'start':start, 'end':end}
+                        usages_by_key[id] = {'word': lemma, 'text':context_tokenized, 'start':start, 'end':end, 'grouping':grouping}
 
             temp_labels = {}
             with open(os.path.join(self.home_path,'data',word,'judgments.csv')) as f:
@@ -235,7 +243,7 @@ class DWUG(Benchmark):
                         line = line.replace('\n','').split('\t')
                         idx1, idx2 = line[0], line[1]
                         label = int(line[3])
-                        if label != 0 and not idx1 in excluded_instances and not idx2 in excluded_instances:
+                        if (label != 0 or not exclude_non_judgments) and not idx1 in excluded_instances and not idx2 in excluded_instances:
                             if not frozenset([idx1,idx2]) in temp_labels:
                                 temp_labels[frozenset([idx1,idx2])] = []
                             temp_labels[frozenset([idx1,idx2])].append(label)
@@ -244,15 +252,27 @@ class DWUG(Benchmark):
                 ordered_ids = list(key)
                 id1, id2 = ordered_ids[0], ordered_ids[1]
                 usage1, usage2 = usages_by_key[id1], usages_by_key[id2]
-                data.append({'text1':usage1['text'],'start1':usage1['start'],'end1':usage1['end'],
-                            'text2':usage2['text'],'start2':usage2['start'],'end2':usage2['end'],
-                            'label':self.normalize_labels(temp_labels[key])})
+                word = usage1['word']
+                assert word == usage2['word']
+                if only_between_groups and usage1['grouping'] == usage2['grouping']:
+                    continue
+                if transform_labels is not None:
+                    try:
+                        label = transform_labels(temp_labels[key])
+                    except:
+                        logging.error(f'{transform_labels} could not be used to transform labels.')
+                        raise ValueError
+                else:
+                    label = np.mean(temp_labels[key])
+                data.append({'word': word, 
+                            'id1': id1, 'text1': usage1['text'], 'start1': usage1['start'], 'end1': usage1['end'],
+                            'id2': id2, 'text2': usage2['text'], 'start2': usage2['start'], 'end2': usage2['end'],
+                            'label': label})
 
         wic.load_from_data(data) 
+        for d in data:
+            wic.words.add(d['word'])
         return wic
-    
-    def normalize_labels(self, labels):
-        return int(np.mean(labels) - 2.5 > 0) 
         
 
 # Dataset handling for the Word-in-Context (WiC) task
@@ -271,6 +291,7 @@ class WiC(Benchmark):
         self.dataset = dataset
         self.version = version
         self.language = language
+        self.words = set()
 
         if dataset != None and version != None and (dataset == 'WiC' or dataset == 'TempoWiC' or language != None):
             lc = LanguageChange()
@@ -396,7 +417,7 @@ class WiC(Benchmark):
                       filename, 
                       word_indexes : bool = False,
                       index_to_offsets = None,
-                      field_map = {'start1': 2, 'end1': 3, 'start2':4, 'end2':5, 'text1': 6 , 'text2': 7, 'label': 8},
+                      field_map = {'word': 0, 'start1': 2, 'end1': 3, 'start2':4, 'end2':5, 'text1': 6 , 'text2': 7, 'label': 8},
                       skiplines = 0):
         
         if index_to_offsets is None:
@@ -441,7 +462,7 @@ class WiC(Benchmark):
         if dataset == 'WiC':
             for key in data_paths.keys():
                 if data_paths[key]['data'] is not None:
-                    data[key] = self.load_from_txt(data_paths[key]['data'], word_indexes=True, field_map={'indexes':2, 'text1':3, 'text2':4})
+                    data[key] = self.load_from_txt(data_paths[key]['data'], word_indexes=True, field_map={'word':0,'indexes':2, 'text1':3, 'text2':4})
                 if data_paths[key]['labels'] is not None:
                     labels = self.load_from_txt(data_paths[key]['labels'], field_map={'label': 0})
                     data[key] = [d | labels[i] for i, d in enumerate(data[key])]
@@ -463,7 +484,7 @@ class WiC(Benchmark):
                     if language == 'FA':
                         for i, d in enumerate(data[key]):
                             data[key][i]['start1'], data[key][i]['end1'] = get_start_end(d['text1'], d['start1'], d['end1'])
-                            data[key][i]['start2'], data[key][i]['end2'] = get_start_end(d['text2'], d['start2'], d['end2']) 
+                            data[key][i]['start2'], data[key][i]['end2'] = get_start_end(d['text2'], d['start2'], d['end2'])
 
             if data_paths['test']['data'] is not None:
                 data['test'] = self.load_from_txt(data_paths['test']['data'])
@@ -475,6 +496,8 @@ class WiC(Benchmark):
                 if data_paths['test']['labels'] is not None:
                     labels = self.load_from_txt(data_paths['test']['labels'], field_map={'label': 0})
                     data['test'] = [d | labels[i] for i, d in enumerate(data['test'])]
+
+            
 
         # TempoWiC, containing social media data annotated with dates.
         elif dataset == "TempoWiC":
@@ -493,10 +516,11 @@ class WiC(Benchmark):
                             json_data = json.loads(line)
                             text1 = json_data['tweet1']['text']
                             text2 = json_data['tweet2']['text']
+                            word = json_data['word']
                             start1, end1 = json_data['tweet1']['text_start'], json_data['tweet1']['text_end']
                             start2, end2 = json_data['tweet2']['text_start'], json_data['tweet2']['text_end']
                             if json_data['id'] in data_dict: 
-                                data_dict[json_data['id']] = data_dict[json_data['id']] | {'id': json_data['id'], 'text1': text1, 'text2': text2, 'start1': start1, 'end1': end1,'start2': start2,'end2': end2}
+                                data_dict[json_data['id']] = data_dict[json_data['id']] | {'id': json_data['id'], 'word': word, 'text1': text1, 'text2': text2, 'start1': start1, 'end1': end1,'start2': start2,'end2': end2}
 
                 data[key] = list(data_dict.values())
 
@@ -510,6 +534,7 @@ class WiC(Benchmark):
                         json_data = json.load(f)
 
                         for ex in json_data:
+                            word = ex['lemma']
                             text1 = ex['sentence1']
                             text2 = ex['sentence2']
 
@@ -523,7 +548,7 @@ class WiC(Benchmark):
                                 start1, end1 = (int(offset) for offset in ex['ranges1'].split(",")[0].split("-"))
                                 start2, end2 = (int(offset) for offset in ex['ranges2'].split(",")[0].split("-"))
 
-                            data_dict[ex['id']] = {'id': ex['id'], 'text1': text1, 'text2': text2, 'start1': start1, 'end1': end1,'start2': start2,'end2': end2}
+                            data_dict[ex['id']] = {'id': ex['id'], 'word': word, 'text1': text1, 'text2': text2, 'start1': start1, 'end1': end1,'start2': start2,'end2': end2}
 
                 if data_paths[key]['labels'] is not None:
                     with open(os.path.join(self.home_path, data_paths[key]['labels'])) as f:
@@ -553,6 +578,11 @@ class WiC(Benchmark):
                         text1, start1, end1 = extract_word_indexes(d['text1'], regex)
                         text2, start2, end2 = extract_word_indexes(d['text2'], regex)
                         data[key][i] = d | {'text1':text1, 'start1':start1, 'end1':end1, 'text2':text2, 'start2':start2, 'end2':end2}
+
+        for key in data.keys():
+            for d in data[key]:
+                if 'word' in d:
+                    self.words.add(d['word'])
 
         self.data = data
         
@@ -603,25 +633,32 @@ class WiC(Benchmark):
                 all_data += dataset
             return all_data
         
-    def split_train_dev_test(self, train_prop = 0.8, dev_prop = 0.1, test_prop = 0.1):
+    def split_train_dev_test(self, train_prop = 0.8, dev_prop = 0.1, test_prop = 0.1, shuffle = True):
         for s in ['train','dev','test']:
             if s in self.data.keys():
                 logging.info(f'Dataset already contains a {s} set.')
-                return
         if not 'all' in self.data.keys():
-            raise ValueError
+            self.data['all'] = []
+            for dataset in self.data.values():
+                self.data['all'].extend(dataset)
         
         assert train_prop + dev_prop + test_prop == 1
 
-        random.shuffle(self.data['all'])
+        if shuffle:
+            random.shuffle(self.data['all'])
+            
         train_offset = int(len(self.data['all']) * train_prop)
         dev_offset = train_offset + int(len(self.data['all']) * dev_prop)
 
         self.data['train'] = self.data['all'][:train_offset]
         self.data['dev'] = self.data['all'][train_offset:dev_offset]
         self.data['test'] = self.data['all'][dev_offset:]
+
+    def get_data_by_word(self, dataset, word):
+        dataset = self.get_dataset(dataset)
+        return list(filter(lambda d : d['word'] == word, dataset))
     
-    def evaluate(self, predictions : List[Dict] | Dict, dataset, metric):
+    def evaluate(self, predictions : List[Dict] | Dict, dataset, metric, word = None):
         """
             Evaluates predictions by comparing them to the true labels of the dataset.
             Args:
@@ -631,6 +668,13 @@ class WiC(Benchmark):
                 metric (function) : a metric such as scipy.stats.spearmanr, that can be used to compare the predictions
         """
         dataset = self.get_dataset(dataset)
+
+        if word is not None:
+            if not word in self.words:
+                logging.error(f'Word {word} was not found.')
+                raise ValueError
+            dataset = filter(lambda d : d['word'] == word, dataset)
+
         if type(predictions) == dict and 'id' in predictions.keys():
             for d in dataset:
                 if not 'id' in d.keys():
@@ -646,25 +690,23 @@ class WiC(Benchmark):
         except:
             logging.error(f'Could not use {metric} to compare the true and predicted labels.')
     
-    def evaluate_spearman(self, predictions : List[Dict] | Dict, dataset = 'test'):
-        return self.evaluate(predictions, dataset, spearmanr)
+    def evaluate_spearman(self, predictions : List[Dict] | Dict, dataset = 'test', word = None):
+        return self.evaluate(predictions, dataset, spearmanr, word)
 
-    def evaluate_accuracy(self, predictions : List[Dict] | Dict, dataset = 'test'):
-        return self.evaluate(predictions, dataset, accuracy_score)
-        
-
+    def evaluate_accuracy(self, predictions : List[Dict] | Dict, dataset = 'test', word = None):
+        return self.evaluate(predictions, dataset, accuracy_score, word)
+    
+    def evaluate_f1(self, predictions : List[Dict] | Dict, dataset = 'test', word = None, average='macro'):
+        return self.evaluate(predictions, dataset, lambda truth, pred : f1_score(truth, pred, average=average), word)
     
 
-    
-
-# Dataset handling for the Word Sense Disambiguation (WSD) task
+# Dataset handling for the Word Sense Disambiguation (WSD) task (to be implemented)
 class WSD(Benchmark):
     def __init__(self):
         super().__init__()
 
 
-
-# Dataset handling for the Word Sense Induction (WSI) task
+# Dataset handling for the Word Sense Induction (WSI) task (to be implemented)
 class WSI(Benchmark):
     def __init__(self):
         super().__init__()
