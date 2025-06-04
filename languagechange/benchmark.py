@@ -5,6 +5,20 @@ from languagechange.utils import NumericalTime, LiteralTime
 import webbrowser
 import os
 import pickle
+import lxml.etree as ET
+import logging
+from itertools import islice
+import random
+import numpy as np
+from scipy.stats import spearmanr
+from sklearn.metrics import accuracy_score, f1_score
+from typing import List, Dict
+
+def get_start_end(text, word_index):
+    split_text = text.split(" ")
+    start = sum(len(s)+1 for s in split_text[:word_index])
+    end = start + len(split_text[word_index])
+    return start, end
 
 
 class Benchmark():
@@ -193,4 +207,221 @@ class DWUG(Benchmark):
 
     def get_stats_groupings(self):
         return self.get_stats_groupings
+    
+    """
+What we want for cast to WSD:
+
+In WSD, we have an example consisting of a target word in the sentence, and we want to predict the sense of the target word given a predefined sense inventory. In the case of DWUGs, we have usages of different words being assigned to different clusters. Each of these clusters we assume correspond to a sense of the word.
+
+
+
+    """
+    def cast_to_WSD(self, remove_outliers = True):
+        data = []
+        for word in self.stats_groupings:
+            usages_by_id = {}
+            with open(os.path.join(self.home_path,'clusters/opt',f'{word}.csv')) as f:
+                for line in islice(f, 1, None):
+                    line = line.replace('\n','').split('\t')
+                    id, label = line
+                    if not remove_outliers or int(label) != -1:
+                        usages_by_id[id] = {'id': id, 'label': label}
+
+            
+            with open(os.path.join(self.home_path,'data',word,'uses.csv')) as f:
+                for line in islice(f, 1, None):
+                    line = line.replace('\n','').split('\t')
+                    lemma = line[0]
+                    id = line[4]
+                    if id in usages_by_id:
+                        context_tokenized = line[9]
+                        word_index = int(line[10])
+                        start, end = get_start_end(context_tokenized, word_index)
+                        usages_by_id[id].update({'word': lemma, 'text':context_tokenized, 'start':start, 'end':end})
+            data.extend(list(usages_by_id.values()))
         
+        wsd = WSD()
+        wsd.load_from_data(data)
+        return wsd
+
+        
+
+# Dataset handling for the Word Sense Disambiguation (WSD) task
+class WSD(Benchmark):
+    def __init__(self, path = None, dataset = None, language = None):
+        # What we want:
+        #lc = LanguageChange()
+        #home_path = lc.get_resource('benchmarks', 'WSD', dataset, version)
+
+        if dataset == 'XL-WSD':
+            print("Create home path")
+            self.home_path = path
+        else:
+            self.home_path = None
+
+        self.words = set()
+
+        if self.home_path is not None:
+            self.load(dataset, language)
+
+    # Loads already formatted data, with each example as in self.load()
+    def load_from_data(self, data):
+        if type(data) == list:
+            self.data = {'all': data}
+        elif type(data) == dict:
+            self.data = data
+
+    # Finds the file paths of the data and labels for possible train, dev and test sets.
+    def find_data_paths(self, dataset, language):
+        
+        train_paths = {'data':None, 'labels':None}
+        dev_paths= {'data':None, 'labels':None}
+        test_paths = {'data':None, 'labels':None}
+        data_paths = {'train':train_paths, 'dev':dev_paths, 'test':test_paths}
+
+        if dataset == 'XL-WSD':
+
+            if os.path.exists(os.path.join(self.home_path, f'training_datasets/semcor_{language.lower()}')):
+                data_paths['train']['data'] = f'training_datasets/semcor_{language.lower()}/semcor_{language.lower()}.data.xml'
+                data_paths['train']['labels'] = f'training_datasets/semcor_{language.lower()}/semcor_{language.lower()}.gold.key.txt'
+            else:
+                logging.info(f'No train set found for {language}.')
+            
+            if os.path.exists(os.path.join(self.home_path, f'evaluation_datasets/dev-{language.lower()}')):
+                data_paths['dev']['data'] = f'evaluation_datasets/dev-{language.lower()}/dev-{language.lower()}.data.xml'
+                data_paths['dev']['labels'] = f'evaluation_datasets/dev-{language.lower()}/dev-{language.lower()}.gold.key.txt'
+            else:
+                logging.info(f'No dev set found for {language}. Did you enter the right language code?')
+
+            if os.path.exists(os.path.join(self.home_path, f'evaluation_datasets/test-{language.lower()}')):
+                data_paths['test']['data'] = f'evaluation_datasets/test-{language.lower()}/test-{language.lower()}.data.xml'
+                data_paths['test']['labels'] = f'evaluation_datasets/test-{language.lower()}/test-{language.lower()}.gold.key.txt'
+            else:
+                logging.info(f'No test set found for {language}. Did you enter the right language code?')
+
+        return data_paths
+    
+    # Reads an XML containing WSD data excl. labels
+    def read_xml(self, path):
+        parser = ET.iterparse(path, events=('start', 'end'))
+
+        data = []
+
+        sentence_tag = 'sentence'
+        word_tag = 'wf'
+        target_tag = 'instance'
+
+        for event, elem in parser:
+
+            if elem.tag == sentence_tag and event == 'start':
+                sent = {'text': [], 'target_words': {}}
+
+            elif elem.tag == word_tag and event == 'end':
+                sent['text'].append(elem.text)
+
+            elif elem.tag == target_tag and event == 'end':
+                sent['text'].append(elem.text)
+                sent['target_words'][elem.attrib['id']] = {'lemma': elem.attrib['lemma'], 'index': len(sent['text']) - 1}
+
+            elif elem.tag == sentence_tag and event == 'end':
+                data.append(sent)
+
+            #TODO: elem.clear in the appropriate places
+
+        return data
+
+    def load_from_files(self, data_paths, dataset):
+
+        def get_start_end(text, word_index):
+            start = sum(len(s) + 1 for s in text[:word_index])
+            end = start + len(text[word_index])
+            return start, end
+        
+        data = {'train':[], 'dev':[], 'test':[]}
+        
+        if dataset == 'XL-WSD':
+            print("Dataset is XL-WSD")
+            for key in data_paths.keys():
+
+                data_by_id = {}
+
+                if data_paths[key]['data'] is not None:
+
+                    raw_data = self.read_xml(os.path.join(self.home_path, data_paths[key]['data']))
+                    for d in raw_data:
+                        for id, target in d['target_words'].items():
+                            start, end = get_start_end(d['text'], target['index'])
+                            data_by_id[id] = {'text': " ".join(d['text']), 'word': target['lemma'], 'start': start, 'end': end}
+
+                if data_paths[key]['labels'] is not None:
+                    with open(os.path.join(self.home_path, data_paths[key]['labels'])) as f:
+                        for line in f:
+                            line_data = line.strip("\n").split(" ")
+                            id = line_data[0]
+                            labels = line_data[1:]
+                            data_by_id[id]['label'] = labels
+                            data_by_id[id]['id'] = id
+
+                data[key] = list(data_by_id.values())
+
+            self.data = data
+
+
+    def load(self, dataset, language):
+        data_paths = self.find_data_paths(dataset, language)
+        self.load_from_files(data_paths, dataset)
+
+    def get_dataset(self, key):
+        if key in self.data.keys():
+            return self.data[key]
+        else:
+            raise KeyError
+
+    def evaluate(self, predictions : List[Dict] | Dict, dataset, metric, word = None):
+        """
+            Evaluates predictions by comparing them to the true labels of the dataset.
+            Args:
+                predictions (list(dict) | dict) : the predictions. If a dict, id:s are expected in both this dict and the
+                dataset to compare against.
+                dataset (str) : one of ['train','dev','test','dev_larger',...]
+                metric (function) : a metric such as scipy.stats.spearmanr, that can be used to compare the predictions
+        """
+        dataset = self.get_dataset(dataset)
+
+        if word is not None:
+            if not word in self.words:
+                logging.error(f'Word {word} was not found.')
+                raise ValueError
+            dataset = filter(lambda d : d['word'] == word, dataset)
+
+        if type(predictions) == dict and 'id' in predictions.keys():
+            for d in dataset:
+                if not 'id' in d.keys():
+                    logging.error('Could not find id:s for all examples in the dataset.')
+                    raise KeyError
+            pred = [predictions[ex['id']] for ex in dataset]
+        else:
+            pred = predictions
+        truth = [ex['label'] for ex in dataset]
+        try:
+            stats = metric(truth, pred)
+            return stats
+        except:
+            logging.error(f'Could not use {metric} to compare the true and predicted labels.')
+
+    def evaluate_spearman(self, predictions : List[Dict] | Dict, dataset = 'test', word = None):
+        return self.evaluate(predictions, dataset, spearmanr, word)
+
+    def evaluate_accuracy(self, predictions : List[Dict] | Dict, dataset = 'test', word = None):
+        return self.evaluate(predictions, dataset, accuracy_score, word)
+    
+    def evaluate_f1(self, predictions : List[Dict] | Dict, dataset = 'test', word = None, average='macro'):
+        return self.evaluate(predictions, dataset, lambda truth, pred : f1_score(truth, pred, average=average), word)
+    
+
+            
+
+            
+
+# Format for each data example:
+#{'text':text, 'start1': 'end1': label:'synset/babelsysnet'}
