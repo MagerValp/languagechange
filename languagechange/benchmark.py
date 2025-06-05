@@ -14,6 +14,11 @@ from scipy.stats import spearmanr
 from sklearn.metrics import accuracy_score, f1_score
 from typing import List, Dict
 
+def get_start_end(text, word_index):
+    split_text = text.split(" ")
+    start = sum(len(s)+1 for s in split_text[:word_index])
+    end = start + len(split_text[word_index])
+    return start, end
 
 
 class Benchmark():
@@ -202,8 +207,6 @@ class DWUG(Benchmark):
 
     def get_stats_groupings(self):
         return self.get_stats_groupings
-    
-
     
     """
 What we want for cast to WSD:
