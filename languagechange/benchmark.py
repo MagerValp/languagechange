@@ -115,10 +115,14 @@ class DWUG(Benchmark):
 
             word = Target(lemma)
             word.set_lemma(lemma)
-            self.binary_task[word] = int(self.stats_groupings[lemma]['change_binary'])
-            self.graded_task[word] = float(self.stats_groupings[lemma]['change_graded'])
-            self.binary_gain_task[word] = int(self.stats_groupings[lemma]['change_binary_gain'])
-            self.binary_loss_task[word] = int(self.stats_groupings[lemma]['change_binary_loss'])
+            if 'change_binary' in self.stats_groupings[lemma].keys():
+                self.binary_task[word] = int(self.stats_groupings[lemma]['change_binary'])
+            if 'change_graded' in self.stats_groupings[lemma].keys():
+                self.graded_task[word] = float(self.stats_groupings[lemma]['change_graded'])
+            if 'change_binary_gain' in self.stats_groupings[lemma].keys():
+                self.binary_gain_task[word] = int(self.stats_groupings[lemma]['change_binary_gain'])
+            if 'change_binary_loss' in self.stats_groupings[lemma].keys():
+                self.binary_loss_task[word] = int(self.stats_groupings[lemma]['change_binary_loss'])
 
 
     def get_usage_graph(self, word):
