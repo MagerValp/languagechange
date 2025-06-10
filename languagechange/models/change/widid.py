@@ -7,19 +7,10 @@ class WiDiD:
     """
         A class that implements WiDiD (https://github.com/FrancescoPeriti/WiDiD).
     """
-    def __init__(self, affinity: str = 'cosine',
-                 damping: float = 0.9,
-                 max_iter: int = 200,
-                 convergence_iter: int = 15,
-                 copy: bool = True,
-                 preference: bool = None,
-                 verbose: bool = False,
-                 random_state: int = 42,
-                 th_gamma: int = 0,
-                 pack: str = 'mean',
-                 singleton: str = 'one',
-                 metric: str = 'cosine'):
-        self.app = Clustering(APosterioriaffinityPropagation(affinity=affinity, damping=damping, max_iter=max_iter, convergence_iter=convergence_iter, copy=copy, preference=preference, verbose=verbose, random_state=random_state, th_gamma=th_gamma, pack=pack, singleton=singleton))
+    def __init__(self, algorithm = APosterioriaffinityPropagation, metric = 'cosine', **args):
+        self.clustering_parameters = args
+        self.algorithm = algorithm
+        self.clustering = Clustering(self.algorithm(**self.clustering_parameters))
         self.metric = metric
 
     
@@ -40,8 +31,9 @@ class WiDiD:
                 prot_embs ([np.array]): a list of matrices encoding the prototype (average) embedding of each cluster in each time period.
                 change_scores (TimeSeries): a timeseries (languagechange.models.change.timeseries.TimeSeries) containing the degree of change between the embeddings in different time periods.
         """
-        self.app.get_cluster_results(embs_list)
-        all_labels = self.app.labels
+        self.clustering = Clustering(self.algorithm(**self.clustering_parameters))
+        self.clustering.get_cluster_results(embs_list)
+        all_labels = self.clustering.labels
         labels = []
 
         i = 0
