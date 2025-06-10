@@ -23,13 +23,76 @@ class Benchmark():
     def __init__(self):
         pass
 
+    def get_dataset(self, key):
+        if key in self.data.keys():
+            return self.data[key]
+        else:
+            raise KeyError
+    
+    def get_train(self):
+        if 'train' in self.data.keys():
+            return self.data['train']
+        else:
+            logging.info('Did not find a train set. Returning None')
+    
+    def get_dev(self):
+        if 'dev' in self.data.keys():
+            return self.data['dev']
+        else:
+            logging.info('Did not find a dev set. Returning None')
+    
+    def get_test(self):
+        if 'test' in self.data.keys():
+            return self.data['test']
+        else:
+            logging.info('Did not find a test set. Returning None')
+    
+    def get_all_data(self):
+        if 'all' in self.data.keys():
+            return self.data['all']
+        else:
+            all_data = []
+            for dataset in self.data.values():
+                all_data += dataset
+            return all_data
+        
+    def split_train_dev_test(self, train_prop = 0.8, dev_prop = 0.1, test_prop = 0.1, shuffle = True):
+        for s in ['train','dev','test']:
+            if s in self.data.keys():
+                logging.info(f'Dataset already contains a {s} set.')
+        if not 'all' in self.data.keys():
+            self.data['all'] = []
+            for dataset in self.data.values():
+                self.data['all'].extend(dataset)
+        
+        assert train_prop + dev_prop + test_prop == 1
+
+        if shuffle:
+            random.shuffle(self.data['all'])
+            
+        train_offset = int(len(self.data['all']) * train_prop)
+        dev_offset = train_offset + int(len(self.data['all']) * dev_prop)
+
+        self.data['train'] = self.data['all'][:train_offset]
+        self.data['dev'] = self.data['all'][train_offset:dev_offset]
+        self.data['test'] = self.data['all'][dev_offset:]
+
+    def get_data_by_word(self, dataset, word):
+        dataset = self.get_dataset(dataset)
+        return list(filter(lambda d : d['word'] == word, dataset))
+
 
 class SemEval2020Task1(Benchmark):
 
     def __init__(self, language):
         lc = LanguageChange()
         self.language = language
-        home_path = lc.get_resource('benchmarks', 'SemEval 2020 Task 1', self.language, 'no-version')
+        if self.language == 'NO':
+            home_path = lc.get_resource('benchmarks', 'NorDiaChange', self.language, 'no-version')
+        elif self.language == 'RU':
+            home_path = lc.get_resource('benchmarks', 'RuShiftEval', self.language, 'no-version')
+        else:
+            home_path = lc.get_resource('benchmarks', 'SemEval 2020 Task 1', self.language, 'no-version')
         semeval_folder = os.listdir(home_path)[0]
         self.home_path = os.path.join(home_path,semeval_folder)
         self.load()
@@ -43,17 +106,31 @@ class SemEval2020Task1(Benchmark):
         self.binary_task = {}
         self.graded_task = {}
 
-        with open(os.path.join(self.home_path, 'truth', 'binary.txt')) as f:
-            for line in f:
-                word, label = line.split()
-                word = Target(word)
-                self.binary_task[word] = int(label)
+        if self.language == 'NO':
+            pass
+        elif self.language == 'RU':
+            pass
+        else:
+            with open(os.path.join(self.home_path, 'truth', 'binary.txt')) as f:
+                for line in f:
+                    word, label = line.split()
+                    word = Target(word)
+                    self.binary_task[word] = int(label)
 
-        with open(os.path.join(self.home_path, 'truth', 'graded.txt')) as f:
-            for line in f:
-                word, score = line.split()
-                word = Target(word)
-                self.graded_task[word] = float(score)
+        if self.language == 'NO':
+            pass
+        elif self.language == 'RU':
+            with open(os.path.join(self.home_path, 'annotated_all.tsv')) as f:
+                for line in f:
+                    line_data = line.split()
+                    word = Target(line_data[0])
+                    self.graded_task[word] = [float(change_score) for change_score in line_data[1:]]
+        else:
+            with open(os.path.join(self.home_path, 'truth', 'graded.txt')) as f:
+                for line in f:
+                    word, score = line.split()
+                    word = Target(word)
+                    self.graded_task[word] = float(score)
 
 
 # Gets the character offsets from a tokenized sentence string and an index of the word in question.
@@ -280,7 +357,7 @@ class DWUG(Benchmark):
 
         wic.load_from_data(data) 
         for d in data:
-            wic.words.add(d['word'])
+            wic.target_words.add(d['word'])
         return wic
     
     def cast_to_WSD(self, remove_outliers = True):
@@ -310,7 +387,7 @@ class DWUG(Benchmark):
             wsd = WSD()
             wsd.load_from_data(data)
             for d in data:
-                wsd.words.add(d['word'])
+                wsd.target_words.add(d['word'])
             return wsd
         
 
@@ -330,7 +407,7 @@ class WiC(Benchmark):
         self.dataset = dataset
         self.version = version
         self.language = language
-        self.words = set()
+        self.target_words = set()
 
         if dataset != None and version != None and (dataset == 'WiC' or dataset == 'TempoWiC' or language != None):
             lc = LanguageChange()
@@ -450,7 +527,6 @@ class WiC(Benchmark):
                     data_paths[s+'_larger'] = {'data': os.path.join(language_path, f"{s}_larger.tsv")}
 
         return data_paths
-
 
     def load_from_txt(self, 
                       filename, 
@@ -621,7 +697,7 @@ class WiC(Benchmark):
         for key in data.keys():
             for d in data[key]:
                 if 'word' in d:
-                    self.words.add(d['word'])
+                    self.target_words.add(d['word'])
 
         self.data = data
         
@@ -638,64 +714,6 @@ class WiC(Benchmark):
     def load_from_resource_hub(self, dataset, language, crosslingual = False):
         data_paths = self.find_data_paths(dataset, language, crosslingual)
         self.load_from_files(data_paths, dataset, language, crosslingual)
-
-    def get_dataset(self, key):
-        if key in self.data.keys():
-            return self.data[key]
-        else:
-            raise KeyError
-    
-    def get_train(self):
-        if 'train' in self.data.keys():
-            return self.data['train']
-        else:
-            logging.info('Did not find a train set. Returning None')
-    
-    def get_dev(self):
-        if 'dev' in self.data.keys():
-            return self.data['dev']
-        else:
-            logging.info('Did not find a dev set. Returning None')
-    
-    def get_test(self):
-        if 'test' in self.data.keys():
-            return self.data['test']
-        else:
-            logging.info('Did not find a test set. Returning None')
-    
-    def get_all_data(self):
-        if 'all' in self.data.keys():
-            return self.data['all']
-        else:
-            all_data = []
-            for dataset in self.data.values():
-                all_data += dataset
-            return all_data
-        
-    def split_train_dev_test(self, train_prop = 0.8, dev_prop = 0.1, test_prop = 0.1, shuffle = True):
-        for s in ['train','dev','test']:
-            if s in self.data.keys():
-                logging.info(f'Dataset already contains a {s} set.')
-        if not 'all' in self.data.keys():
-            self.data['all'] = []
-            for dataset in self.data.values():
-                self.data['all'].extend(dataset)
-        
-        assert train_prop + dev_prop + test_prop == 1
-
-        if shuffle:
-            random.shuffle(self.data['all'])
-            
-        train_offset = int(len(self.data['all']) * train_prop)
-        dev_offset = train_offset + int(len(self.data['all']) * dev_prop)
-
-        self.data['train'] = self.data['all'][:train_offset]
-        self.data['dev'] = self.data['all'][train_offset:dev_offset]
-        self.data['test'] = self.data['all'][dev_offset:]
-
-    def get_data_by_word(self, dataset, word):
-        dataset = self.get_dataset(dataset)
-        return list(filter(lambda d : d['word'] == word, dataset))
     
     def evaluate(self, predictions : List[Dict] | Dict, dataset, metric, word = None):
         """
@@ -709,7 +727,7 @@ class WiC(Benchmark):
         dataset = self.get_dataset(dataset)
 
         if word is not None:
-            if not word in self.words:
+            if not word in self.target_words:
                 logging.error(f'Word {word} was not found.')
                 raise ValueError
             dataset = filter(lambda d : d['word'] == word, dataset)
@@ -741,20 +759,20 @@ class WiC(Benchmark):
 
 # Dataset handling for the Word Sense Disambiguation (WSD) task
 class WSD(Benchmark):
-    def __init__(self, path = None, dataset = None, language = None):
-        # What we want (we need to have a proper link to the dataset):
-        #lc = LanguageChange()
-        #home_path = lc.get_resource('benchmarks', 'WSD', dataset, version)
+    def __init__(self, path = None, dataset = None, language = None, version = None):
+        if path == None and dataset != None and language != None and version != None:
+            lc = LanguageChange()
+            path = lc.get_resource('benchmarks', 'WSD', dataset, version)
 
-        if dataset == 'XL-WSD':
-            self.home_path = path
-            logging.info(f'Home path:{self.home_path}')
+            if dataset == 'XL-WSD':
+                self.home_path = os.path.join(path, 'xl-wsd')
         else:
-            self.home_path = None
+            self.home_path = path
 
-        self.words = set()
+        self.target_words = set()
 
-        if self.home_path is not None:
+        if self.home_path != None:
+            logging.info(f'Home path:{self.home_path}')
             self.load(dataset, language)
 
     # Loads already formatted data, with each example as in self.load()
@@ -815,12 +833,11 @@ class WSD(Benchmark):
             elif elem.tag == target_tag and event == 'end':
                 sent['text'].append(elem.text)
                 sent['target_words'][elem.attrib['id']] = {'lemma': elem.attrib['lemma'], 'index': len(sent['text']) - 1}
-                self.words.add(elem.attrib['lemma'])
+                self.target_words.add(elem.attrib['lemma'])
 
             elif elem.tag == sentence_tag and event == 'end':
                 data.append(sent)
-
-            #TODO: elem.clear in the appropriate places to save RAM
+                elem.clear()
 
         return data
 
@@ -859,69 +876,9 @@ class WSD(Benchmark):
 
             self.data = data
 
-
     def load(self, dataset, language):
         data_paths = self.find_data_paths(dataset, language)
         self.load_from_files(data_paths, dataset)
-
-    def get_dataset(self, key):
-        if key in self.data.keys():
-            return self.data[key]
-        else:
-            logging.error(f'Did not find a dataset named {key}.')
-            raise KeyError
-        
-    def get_train(self):
-        if 'train' in self.data.keys():
-            return self.data['train']
-        else:
-            logging.error('Did not find a train set. Returning None')
-    
-    def get_dev(self):
-        if 'dev' in self.data.keys():
-            return self.data['dev']
-        else:
-            logging.error('Did not find a dev set. Returning None')
-    
-    def get_test(self):
-        if 'test' in self.data.keys():
-            return self.data['test']
-        else:
-            logging.error('Did not find a test set. Returning None')
-    
-    def get_all_data(self):
-        if 'all' in self.data.keys():
-            return self.data['all']
-        else:
-            all_data = []
-            for dataset in self.data.values():
-                all_data += dataset
-            return all_data
-        
-    def split_train_dev_test(self, train_prop = 0.8, dev_prop = 0.1, test_prop = 0.1, shuffle = True):
-        for s in ['train','dev','test']:
-            if s in self.data.keys():
-                logging.info(f'Dataset already contains a {s} set.')
-        if not 'all' in self.data.keys():
-            self.data['all'] = []
-            for dataset in self.data.values():
-                self.data['all'].extend(dataset)
-        
-        assert train_prop + dev_prop + test_prop == 1
-
-        if shuffle:
-            random.shuffle(self.data['all'])
-            
-        train_offset = int(len(self.data['all']) * train_prop)
-        dev_offset = train_offset + int(len(self.data['all']) * dev_prop)
-
-        self.data['train'] = self.data['all'][:train_offset]
-        self.data['dev'] = self.data['all'][train_offset:dev_offset]
-        self.data['test'] = self.data['all'][dev_offset:]
-        
-    def get_data_by_word(self, dataset, word):
-        dataset = self.get_dataset(dataset)
-        return list(filter(lambda d : d['word'] == word, dataset))
 
     def evaluate(self, predictions : List[Dict] | Dict, dataset, metric, word = None):
         """
@@ -935,7 +892,7 @@ class WSD(Benchmark):
         dataset = self.get_dataset(dataset)
 
         if word is not None:
-            if not word in self.words:
+            if not word in self.target_words:
                 logging.error(f'Word {word} was not found.')
                 raise ValueError
             dataset = filter(lambda d : d['word'] == word, dataset)
@@ -954,9 +911,6 @@ class WSD(Benchmark):
             return stats
         except:
             logging.error(f'Could not use {metric} to compare the true and predicted labels.')
-
-    def evaluate_spearman(self, predictions : List[Dict] | Dict, dataset = 'test', word = None):
-        return self.evaluate(predictions, dataset, spearmanr, word)
 
     def evaluate_accuracy(self, predictions : List[Dict] | Dict, dataset = 'test', word = None):
         return self.evaluate(predictions, dataset, accuracy_score, word)
