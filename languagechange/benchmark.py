@@ -80,6 +80,14 @@ class Benchmark():
     def get_data_by_word(self, dataset, word):
         dataset = self.get_dataset(dataset)
         return list(filter(lambda d : d['word'] == word, dataset))
+    
+    # Utility function which gets the character offsets from a tokenized sentence string and an index of the word in question.
+    def word_index_to_char_indices(self, text, word_index, split_text = False):
+        if split_text:
+            text = text.split(" ")
+        start = sum(len(s)+1 for s in text[:word_index])
+        end = start + len(text[word_index])
+        return start, end
 
 
 class SemEval2020Task1(Benchmark):
@@ -131,14 +139,6 @@ class SemEval2020Task1(Benchmark):
                     word, score = line.split()
                     word = Target(word)
                     self.graded_task[word] = float(score)
-
-
-# Gets the character offsets from a tokenized sentence string and an index of the word in question.
-def word_index_to_char_indices(text, word_index):
-    split_text = text.split(" ")
-    start = sum(len(s)+1 for s in split_text[:word_index])
-    end = start + len(split_text[word_index])
-    return start, end
 
 
 class DWUG(Benchmark):
@@ -319,7 +319,7 @@ class DWUG(Benchmark):
                     if not id in excluded_instances:
                         context_tokenized = line[9]
                         word_index = int(line[10])
-                        start, end = wic.get_start_end(context_tokenized, word_index)
+                        start, end = self.word_index_to_char_indices(context_tokenized, word_index, split_text=True)
                         usages_by_key[id] = {'word': lemma, 'text':context_tokenized, 'start':start, 'end':end, 'grouping':grouping}
 
             temp_labels = {}
@@ -355,9 +355,7 @@ class DWUG(Benchmark):
                             'id2': id2, 'text2': usage2['text'], 'start2': usage2['start'], 'end2': usage2['end'],
                             'label': label})
 
-        wic.load_from_data(data) 
-        for d in data:
-            wic.target_words.add(d['word'])
+        wic.load_from_data(data)
         return wic
     
     def cast_to_WSD(self, remove_outliers = True):
@@ -380,7 +378,7 @@ class DWUG(Benchmark):
                         if id in usages_by_id:
                             context_tokenized = line[9]
                             word_index = int(line[10])
-                            start, end = word_index_to_char_indices(context_tokenized, word_index)
+                            start, end = self.word_index_to_char_indices(context_tokenized, word_index, split_text=True)
                             usages_by_id[id].update({'word': lemma, 'text':context_tokenized, 'start':start, 'end':end, 'label': lemma + ":" + usages_by_id[id]['label']})
                 data.extend(list(usages_by_id.values()))
             
@@ -427,13 +425,6 @@ class WiC(Benchmark):
                 self.home_path = home_path
             
             self.load_from_resource_hub(dataset, language, crosslingual = crosslingual)
-
-    # Gets the character offsets from a tokenized sentence string and an index of the word in question.
-    def get_start_end(self, text, word_index):
-        split_text = text.split(" ")
-        start = sum(len(s)+1 for s in split_text[:word_index])
-        end = start + len(split_text[word_index])
-        return start, end
     
     # Loads already formatted data, with each example as in self.load()
     def load_from_data(self, data):
@@ -441,6 +432,12 @@ class WiC(Benchmark):
             self.data = {'all': data}
         elif type(data) == dict:
             self.data = data
+
+        # Add the lemma in each data example to the set of target words
+        for dataset in self.data.values():
+            for d in dataset:
+                if 'word' in d.keys():
+                    self.target_words.add(d['word'])
 
     # Finds the file paths of the data and labels for possible train, dev and test sets.
     def find_data_paths(self, dataset, language, crosslingual = False):
@@ -536,7 +533,7 @@ class WiC(Benchmark):
                       skiplines = 0):
         
         if index_to_offsets is None:
-            index_to_offsets = self.get_start_end
+            index_to_offsets = lambda text, index : self.word_index_to_char_indices(text, index, split_text=True)
 
         def get_line_data(line, field_map, word_indexes : bool = False):
             line_data = {}
@@ -611,8 +608,6 @@ class WiC(Benchmark):
                 if data_paths['test']['labels'] is not None:
                     labels = self.load_from_txt(data_paths['test']['labels'], field_map={'label': 0})
                     data['test'] = [d | labels[i] for i, d in enumerate(data['test'])]
-
-            
 
         # TempoWiC, containing social media data annotated with dates.
         elif dataset == "TempoWiC":
@@ -694,12 +689,7 @@ class WiC(Benchmark):
                         text2, start2, end2 = extract_word_indexes(d['text2'], regex)
                         data[key][i] = d | {'text1':text1, 'start1':start1, 'end1':end1, 'text2':text2, 'start2':start2, 'end2':end2}
 
-        for key in data.keys():
-            for d in data[key]:
-                if 'word' in d:
-                    self.target_words.add(d['word'])
-
-        self.data = data
+        self.load_from_data(data)
         
     def format_label(self, label):
         if label == 1 or label == 0:
@@ -782,6 +772,12 @@ class WSD(Benchmark):
         elif type(data) == dict:
             self.data = data
 
+        # Add the lemma in each data example to the set of target words
+        for dataset in self.data.values():
+            for d in dataset:
+                if 'word' in d.keys():
+                    self.target_words.add(d['word'])
+
     # Finds the file paths of the data and labels for possible train, dev and test sets.
     def find_data_paths(self, dataset, language):
         
@@ -842,12 +838,6 @@ class WSD(Benchmark):
         return data
 
     def load_from_files(self, data_paths, dataset):
-
-        def get_start_end(text, word_index):
-            start = sum(len(s) + 1 for s in text[:word_index])
-            end = start + len(text[word_index])
-            return start, end
-        
         data = {'train':[], 'dev':[], 'test':[]}
         
         if dataset == 'XL-WSD':
@@ -860,7 +850,7 @@ class WSD(Benchmark):
                     raw_data = self.read_xml(os.path.join(self.home_path, data_paths[key]['data']))
                     for d in raw_data:
                         for id, target in d['target_words'].items():
-                            start, end = get_start_end(d['text'], target['index'])
+                            start, end = self.word_index_to_char_indices(d['text'], target['index'])
                             data_by_id[id] = {'text': " ".join(d['text']), 'word': target['lemma'], 'start': start, 'end': end}
 
                 if data_paths[key]['labels'] is not None:
@@ -887,7 +877,7 @@ class WSD(Benchmark):
                 predictions (list(dict) | dict) : the predictions. If a dict, id:s are expected in both this dict and the
                 dataset to compare against.
                 dataset (str) : one of ['train','dev','test','dev_larger',...]
-                metric (function) : a metric such as scipy.stats.spearmanr, that can be used to compare the predictions
+                metric (function|str) : a metric such as scipy.stats.spearmanr, that can be used to compare the predictions
         """
         dataset = self.get_dataset(dataset)
 
@@ -906,7 +896,16 @@ class WSD(Benchmark):
         else:
             pred = predictions
         truth = [ex['label'] for ex in dataset]
+
+        metric_names = {'accuracy': accuracy_score, 'f1': f1_score}
         try:
+            if type(metric) == str:
+                try:
+                    metric = metric_names[metric]
+                except KeyError:
+                    logging.error(f'Could not use {metric} as a metric.')
+                    return
+                
             stats = metric(truth, pred)
             return stats
         except:
