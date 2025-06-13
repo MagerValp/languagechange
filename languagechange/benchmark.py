@@ -28,7 +28,12 @@ class SemEval2020Task1(Benchmark):
     def __init__(self, language):
         lc = LanguageChange()
         self.language = language
-        home_path = lc.get_resource('benchmarks', 'SemEval 2020 Task 1', self.language, 'no-version')
+        if self.language == 'NO':
+            home_path = lc.get_resource('benchmarks', 'NorDiaChange', self.language, 'no-version')
+        elif self.language == 'RU':
+            home_path = lc.get_resource('benchmarks', 'RuShiftEval', self.language, 'no-version')
+        else:
+            home_path = lc.get_resource('benchmarks', 'SemEval 2020 Task 1', self.language, 'no-version')
         semeval_folder = os.listdir(home_path)[0]
         self.home_path = os.path.join(home_path,semeval_folder)
         self.load()
@@ -42,17 +47,37 @@ class SemEval2020Task1(Benchmark):
         self.binary_task = {}
         self.graded_task = {}
 
-        with open(os.path.join(self.home_path, 'truth', 'binary.txt')) as f:
-            for line in f:
-                word, label = line.split()
-                word = Target(word)
-                self.binary_task[word] = int(label)
+        if self.language == 'NO':
+            subsets = {'subset1', 'subset2'}
+            for subset in subsets:
+                with open(os.path.join(self.home_path, subset, 'stats/stats_groupings.tsv')) as f:
+                    for line in islice(f, 1, None):
+                        line = line.strip('\n').split('\t')
+                        word, binary, graded = line[0], line[11], line[14]
+                        word = Target(word)
+                        self.binary_task[word] = int(binary)
+                        self.graded_task[word] = float(graded)
 
-        with open(os.path.join(self.home_path, 'truth', 'graded.txt')) as f:
-            for line in f:
-                word, score = line.split()
-                word = Target(word)
-                self.graded_task[word] = float(score)
+        elif self.language == 'RU':
+            # For the Russian dataset there is no binary change scores.
+            with open(os.path.join(self.home_path, 'annotated_all.tsv')) as f:
+                for line in f:
+                    line = line.strip('\n').split('\t')
+                    word = Target(line[0])
+                    self.graded_task[word] = [float(change_score) for change_score in line[1:]]
+
+        else:
+            with open(os.path.join(self.home_path, 'truth', 'binary.txt')) as f:
+                for line in f:
+                    word, label = line.split()
+                    word = Target(word)
+                    self.binary_task[word] = int(label)
+
+            with open(os.path.join(self.home_path, 'truth', 'graded.txt')) as f:
+                for line in f:
+                    word, score = line.split()
+                    word = Target(word)
+                    self.graded_task[word] = float(score)
 
 
 class DWUG(Benchmark):
@@ -277,9 +302,46 @@ class DWUG(Benchmark):
         for d in data:
             wic.words.add(d['word'])
         return wic
+    
+    def evaluate_cd(self, predictions):
+        """
+            Evaluates binary change detection by comparing the predictions to the change scores in self.binary_task.
+
+            Args:
+                predictions (Union[List[Int], Dict[Str: Int]]): either a list of predictions (0 or 1) in the same order as the keys of self.stats_groupings or a dictionary {target_word: prediction}.
+
+            Returns:
+                (numpy.float64) An accuracy score: the percentage of correct predictions.
+        """
+
+        if type(predictions) == list:
+            return accuracy_score(list(self.binary_task.values()), predictions)
+        
+        elif type(predictions) == dict:
+            sorted_binary_scores = [i[1] for i in sorted(self.binary_task.items(), key = lambda i : i[0].lemma)]
+            sorted_predictions = [i[1] for i in sorted(predictions.items(), key = lambda i : i[0])]
+            return accuracy_score(sorted_binary_scores, sorted_predictions)
+    
+    def evaluate_gcd(self, predictions):
+        """
+            Evaluates graded change detection by comparing the predictions to the change scores in self.graded_task.
+
+            Args:
+                predictions (Union[List[Int], Dict[Str: Int]]): either a list of predictions (0 or 1) in the same order as the keys of self.stats_groupings or a dictionary {target_word: prediction}.
+
+            Returns:
+                (scipy.stats._stats_py.SignificanceResult[numpy.float64, numpy.float64]) The Spearman correlation (rho, p) between the predictions and the gold labels.
+        """
+        
+        if type(predictions) == list:
+            return spearmanr(list(self.graded_task.values()), predictions)
+        
+        elif type(predictions) == dict:
+            sorted_graded_scores = [i[1] for i in sorted(self.graded_task.items(), key = lambda i : i[0].lemma)]
+            sorted_predictions = [i[1] for i in sorted(predictions.items(), key = lambda i : i[0])]
+            return spearmanr(sorted_graded_scores, sorted_predictions)
         
 
-# Dataset handling for the Word-in-Context (WiC) task
 class WiC(Benchmark):
     """
         Dataset handling for the Word-in-Context (WiC) task.
