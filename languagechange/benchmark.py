@@ -15,7 +15,7 @@ import numpy as np
 from scipy.stats import spearmanr
 from sklearn.metrics import accuracy_score, f1_score
 import lxml.etree as ET
-from typing import List, Dict
+from typing import List, Dict, Union, Callable
 
 
 class Benchmark():
@@ -705,14 +705,14 @@ class WiC(Benchmark):
         data_paths = self.find_data_paths(dataset, language, crosslingual)
         self.load_from_files(data_paths, dataset, language, crosslingual)
     
-    def evaluate(self, predictions : List[Dict] | Dict, dataset, metric, word = None):
+    def evaluate(self, predictions : Union[List[Dict], Dict], dataset, metric : Callable, word = None):
         """
             Evaluates predictions by comparing them to the true labels of the dataset.
             Args:
-                predictions (list(dict) | dict) : the predictions. If a dict, id:s are expected in both this dict and the
+                predictions (Union[List[Dict], Dict]) : the predictions. If a dict, id:s are expected in both this dict and the
                 dataset to compare against.
                 dataset (str) : one of ['train','dev','test','dev_larger',...]
-                metric (function) : a metric such as scipy.stats.spearmanr, that can be used to compare the predictions
+                metric (Callable) : a metric such as scipy.stats.spearmanr, that can be used to compare the predictions.
         """
         dataset = self.get_dataset(dataset)
 
@@ -737,13 +737,13 @@ class WiC(Benchmark):
         except:
             logging.error(f'Could not use {metric} to compare the true and predicted labels.')
     
-    def evaluate_spearman(self, predictions : List[Dict] | Dict, dataset = 'test', word = None):
+    def evaluate_spearman(self, predictions : Union[List[Dict], Dict], dataset = 'test', word = None):
         return self.evaluate(predictions, dataset, spearmanr, word)
 
-    def evaluate_accuracy(self, predictions : List[Dict] | Dict, dataset = 'test', word = None):
+    def evaluate_accuracy(self, predictions : Union[List[Dict], Dict], dataset = 'test', word = None):
         return self.evaluate(predictions, dataset, accuracy_score, word)
     
-    def evaluate_f1(self, predictions : List[Dict] | Dict, dataset = 'test', word = None, average='macro'):
+    def evaluate_f1(self, predictions : Union[List[Dict], Dict], dataset = 'test', word = None, average='macro'):
         return self.evaluate(predictions, dataset, lambda truth, pred : f1_score(truth, pred, average=average), word)
     
 
@@ -781,10 +781,10 @@ class WSD(Benchmark):
     # Finds the file paths of the data and labels for possible train, dev and test sets.
     def find_data_paths(self, dataset, language):
         
-        train_paths = {'data':None, 'labels':None}
-        dev_paths= {'data':None, 'labels':None}
-        test_paths = {'data':None, 'labels':None}
-        data_paths = {'train':train_paths, 'dev':dev_paths, 'test':test_paths}
+        train_paths = {'data': None, 'labels': None}
+        dev_paths= {'data': None, 'labels': None}
+        test_paths = {'data': None, 'labels': None}
+        data_paths = {'train': train_paths, 'dev': dev_paths, 'test': test_paths}
 
         if dataset == 'XL-WSD':
 
@@ -806,13 +806,16 @@ class WSD(Benchmark):
             else:
                 logging.info(f'No test set found for {language}. Did you enter the right language code?')
 
+        else:
+            logging.info("No data was found.")
+
         return data_paths
     
     # Reads an XML containing WSD data excl. labels
     def read_xml(self, path):
-        parser = ET.iterparse(path, events=('start', 'end'))
-
         data = []
+
+        parser = ET.iterparse(path, events=('start', 'end'))
 
         sentence_tag = 'sentence'
         word_tag = 'wf'
@@ -838,6 +841,13 @@ class WSD(Benchmark):
         return data
 
     def load_from_files(self, data_paths, dataset):
+        """
+            Loads a dataset from paths to train, dev and test sets (possibly None).
+
+            Args:
+                data_paths (Dict[Dict[str, str],str]): a dictionary containing the paths to the different parts of the dataset, formatted as in self.find_data_paths().
+                dataset (str): the name of the dataset.
+        """
         data = {'train':[], 'dev':[], 'test':[]}
         
         if dataset == 'XL-WSD':
@@ -846,7 +856,6 @@ class WSD(Benchmark):
                 data_by_id = {}
 
                 if data_paths[key]['data'] is not None:
-
                     raw_data = self.read_xml(os.path.join(self.home_path, data_paths[key]['data']))
                     for d in raw_data:
                         for id, target in d['target_words'].items():
@@ -864,20 +873,20 @@ class WSD(Benchmark):
 
                 data[key] = list(data_by_id.values())
 
-            self.data = data
+        self.load_from_data(data)
 
     def load(self, dataset, language):
         data_paths = self.find_data_paths(dataset, language)
         self.load_from_files(data_paths, dataset)
 
-    def evaluate(self, predictions : List[Dict] | Dict, dataset, metric, word = None):
+    def evaluate(self, predictions : Union[List[Dict], Dict], dataset, metric, word = None):
         """
             Evaluates predictions by comparing them to the true labels of the dataset.
             Args:
-                predictions (list(dict) | dict) : the predictions. If a dict, id:s are expected in both this dict and the
+                predictions (Union[List[Dict], Dict]) : the predictions. If a dict, id:s are expected in both this dict and the
                 dataset to compare against.
                 dataset (str) : one of ['train','dev','test','dev_larger',...]
-                metric (function|str) : a metric such as scipy.stats.spearmanr, that can be used to compare the predictions
+                metric (Union[Callable, str]) : a metric such as scipy.stats.spearmanr, that can be used to compare the predictions. Either a function or a string to which there is a function associated.
         """
         dataset = self.get_dataset(dataset)
 
@@ -911,10 +920,10 @@ class WSD(Benchmark):
         except:
             logging.error(f'Could not use {metric} to compare the true and predicted labels.')
 
-    def evaluate_accuracy(self, predictions : List[Dict] | Dict, dataset = 'test', word = None):
+    def evaluate_accuracy(self, predictions : Union[List[Dict], Dict], dataset = 'test', word = None):
         return self.evaluate(predictions, dataset, accuracy_score, word)
     
-    def evaluate_f1(self, predictions : List[Dict] | Dict, dataset = 'test', word = None, average='macro'):
+    def evaluate_f1(self, predictions : Union[List[Dict], Dict], dataset = 'test', word = None, average='macro'):
         return self.evaluate(predictions, dataset, lambda truth, pred : f1_score(truth, pred, average=average), word)
 
 
