@@ -65,17 +65,23 @@ class Benchmark():
             for dataset in self.data.values():
                 self.data['all'].extend(dataset)
         
-        assert train_prop + dev_prop + test_prop == 1
+        try:
+            assert train_prop + dev_prop + test_prop == 1
+        except AssertionError:
+            logging.error('Train, dev and test proportions must add upp to 1.')
+            return None
 
         if shuffle:
-            random.shuffle(self.data['all'])
+            data = random.sample(self.data['all'], len(self.data['all']))
+        else:
+            data = self.data['all']
             
-        train_offset = int(len(self.data['all']) * train_prop)
-        dev_offset = train_offset + int(len(self.data['all']) * dev_prop)
+        train_offset = int(len(data) * train_prop)
+        dev_offset = train_offset + int(len(data) * dev_prop)
 
-        self.data['train'] = self.data['all'][:train_offset]
-        self.data['dev'] = self.data['all'][train_offset:dev_offset]
-        self.data['test'] = self.data['all'][dev_offset:]
+        self.data['train'] = data[:train_offset]
+        self.data['dev'] = data[train_offset:dev_offset]
+        self.data['test'] = data[dev_offset:]
 
     def get_data_by_word(self, dataset, word):
         dataset = self.get_dataset(dataset)
