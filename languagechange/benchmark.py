@@ -109,16 +109,17 @@ class DWUG(Benchmark):
         else:
             stats_path = os.path.join(self.home_path,'stats')
 
-        with open(os.path.join(stats_path,'stats_groupings.csv')) as f:
-            keys = []
-            for j,line in enumerate(f):
-                line = line.replace('\n','').split('\t')
-                if j > 0:
-                    values = line
-                    D = {keys[j]:values[j] for j in range(1,len(values))}
-                    self.stats_groupings[values[0]] = D
-                else:
-                    keys = line
+        if os.path.exists(os.path.join(stats_path,'stats_groupings.csv')):
+            with open(os.path.join(stats_path,'stats_groupings.csv')) as f:
+                keys = []
+                for j,line in enumerate(f):
+                    line = line.replace('\n','').split('\t')
+                    if j > 0:
+                        values = line
+                        D = {keys[j]:values[j] for j in range(1,len(values))}
+                        self.stats_groupings[values[0]] = D
+                    else:
+                        keys = line
 
         with open(os.path.join(stats_path,'stats.csv')) as f:
             keys = []
@@ -231,7 +232,7 @@ class DWUG(Benchmark):
         return self.stats
 
     def get_stats_groupings(self):
-        return self.get_stats_groupings
+        return self.stats_groupings
     
     def cast_to_WiC(self, only_between_groups = False, remove_outliers = True, exclude_non_judgments = True, transform_labels = None):
         """
@@ -242,7 +243,7 @@ class DWUG(Benchmark):
         """
         wic = WiC(language=self.language)
         data = []
-        for word in self.stats_groupings:
+        for word in self.target_words:
             excluded_instances = set()
 
             with open(os.path.join(self.home_path,'clusters/opt',f'{word}.csv')) as f:
@@ -313,6 +314,9 @@ class DWUG(Benchmark):
             Returns:
                 (numpy.float64) An accuracy score: the percentage of correct predictions.
         """
+        if self.binary_task == {}:
+            logging.error('DWUG does not contain binary change scores; nothing to evaluate on.')
+            return
 
         if type(predictions) == list:
             return accuracy_score(list(self.binary_task.values()), predictions)
@@ -332,6 +336,9 @@ class DWUG(Benchmark):
             Returns:
                 (scipy.stats._stats_py.SignificanceResult[numpy.float64, numpy.float64]) The Spearman correlation (rho, p) between the predictions and the gold labels.
         """
+        if self.graded_task == {}:
+            logging.error('DWUG does not contain graded change scores; nothing to evaluate on.')
+            return
         
         if type(predictions) == list:
             return spearmanr(list(self.graded_task.values()), predictions)
