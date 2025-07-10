@@ -13,7 +13,7 @@ import zipfile
 import random
 import numpy as np
 from scipy.stats import spearmanr
-from sklearn.metrics import accuracy_score, f1_score
+from sklearn.metrics import accuracy_score, f1_score, adjusted_rand_score
 import lxml.etree as ET
 from typing import List, Dict, Union, Callable
 
@@ -151,6 +151,30 @@ class SemEval2020Task1(Benchmark):
                     word, score = line.split()
                     word = Target(word)
                     self.graded_task[word] = float(score)
+
+
+# Gets the character offsets from a tokenized sentence string and an index of the word in question.
+def word_index_to_char_indices(text, word_index):
+    split_text = text.split(" ")
+    start = sum(len(s)+1 for s in split_text[:word_index])
+    end = start + len(split_text[word_index])
+    return start, end
+
+def purity(labels_true, cluster_labels):
+    assert len(labels_true) == len(cluster_labels)
+    N = len(labels_true)
+
+    # Count the amount of usages of each label in each cluster.
+    gold_labeled_clusters = {c : {} for c in set(cluster_labels)}
+    for i in range(N):
+        if labels_true[i] not in gold_labeled_clusters[cluster_labels[i]]:
+            gold_labeled_clusters[cluster_labels[i]][labels_true[i]] = 0
+        gold_labeled_clusters[cluster_labels[i]][labels_true[i]] += 1
+
+    # Select the majority label of each cluster and save its count.
+    majority_counts = [max(gold_labeled_clusters[c].values()) if len(gold_labeled_clusters[c]) != 0 else 0 for c in gold_labeled_clusters.keys()]
+    # The purity is the sum of these counts divided by the total amount of samples.
+    return sum(majority_counts) / N
 
 
 class DWUG(Benchmark):
@@ -375,35 +399,49 @@ class DWUG(Benchmark):
         wic.load_from_data(data)
         return wic
     
-    def cast_to_WSD(self, remove_outliers = True):
-            data = []
-            for word in self.stats_groupings:
-                usages_by_id = {}
-                with open(os.path.join(self.home_path,'clusters/opt',f'{word}.csv')) as f:
-                    for line in islice(f, 1, None):
-                        line = line.replace('\n','').split('\t')
-                        id, label = line
-                        if not remove_outliers or int(label) != -1:
-                            usages_by_id[id] = {'id': id, 'label': label}
-
-                
-                with open(os.path.join(self.home_path,'data',word,'uses.csv')) as f:
-                    for line in islice(f, 1, None):
-                        line = line.replace('\n','').split('\t')
-                        lemma = line[0]
-                        id = line[4]
-                        if id in usages_by_id:
-                            context_tokenized = line[9]
-                            word_index = int(line[10])
-                            start, end = self.word_index_to_char_indices(context_tokenized, word_index, split_text=True)
-                            usages_by_id[id].update({'word': lemma, 'text':context_tokenized, 'start':start, 'end':end, 'label': lemma + ":" + usages_by_id[id]['label']})
-                data.extend(list(usages_by_id.values()))
+    def get_usages_and_senses(self, remove_outliers = True): #So far this is very similar to the cast_to_WSD function
+        data = []
+        for word in self.stats_groupings:
+            usages_by_id = {}
+            with open(os.path.join(self.home_path,'clusters/opt',f'{word}.csv')) as f:
+                for line in islice(f, 1, None):
+                    line = line.replace('\n','').split('\t')
+                    id, label = line
+                    if not remove_outliers or int(label) != -1:
+                        usages_by_id[id] = {'id': id, 'label': label}
             
-            wsd = WSD()
-            wsd.load_from_data(data)
-            for d in data:
-                wsd.target_words.add(d['word'])
-            return wsd
+            with open(os.path.join(self.home_path,'data',word,'uses.csv')) as f:
+                for line in islice(f, 1, None):
+                    line = line.replace('\n','').split('\t')
+                    lemma = line[0]
+                    id = line[4]
+                    if id in usages_by_id:
+                        context_tokenized = line[9]
+                        word_index = int(line[10])
+                        start, end = word_index_to_char_indices(context_tokenized, word_index)
+                        usages_by_id[id].update({'word': lemma, 'text':context_tokenized, 'start':start, 'end':end, 'label': lemma + ":" + usages_by_id[id]['label']})
+            data.extend(list(usages_by_id.values()))
+        return data
+        
+    def cast_to_WSD(self, remove_outliers = True):
+        data = self.get_usages_and_senses(remove_outliers)
+        wsd = WSD()
+        wsd.load_from_data(data)
+        for d in data:
+            wsd.target_words.add(d['word'])
+        return wsd
+
+    def cast_to_WSI(self, remove_outliers = True):
+        data = self.get_usages_and_senses(remove_outliers)
+        wsi = WSI()
+        wsi.load_from_data(data)
+        for d in data:
+            wsi.target_words.add(d['word'])
+        return wsi
+    
+    def cluster_evaluation(self, predictions, metrics = {'ari', 'purity'}, remove_outliers = True):
+        wsi = self.cast_to_WSI(remove_outliers)
+        return wsi.evaluate(predictions, metrics)
     
     def evaluate_cd(self, predictions):
         """
@@ -990,4 +1028,68 @@ class WSD(Benchmark):
 # Dataset handling for the Word Sense Induction (WSI) task (to be implemented)
 class WSI(Benchmark):
     def __init__(self):
-        super().__init__()
+        self.data = {}
+        self.target_words = set()
+
+    # Loads already formatted data, with each example as in self.load()
+    def load_from_data(self, data):
+        if type(data) == list:
+            self.data = {'all': data}
+        elif type(data) == dict:
+            self.data = data
+
+    def evaluate(self, predictions, metrics = {'ari','purity'}, dataset = 'all'):
+        """
+            Evaluates a clustering with respect to the true labels as given in self.data.
+
+            Args:
+                predictions ({str: str|int}|[str|int]): a clustering as either a dictionary {id: cluster} or list .[cluster] of usage assignments. If it is a list, it is expected to be in the same order as the dataset evaluated on.
+                metric (function|str): the metric to use for evaluation, such as RI, ARI or purity.
+                dataset (str): the sub-dataset to use, e.g. 'test' or 'all'.
+
+            Returns:
+                scores ({str: float}): the score for each word.
+        """
+        labels_per_word = {}
+        if type(predictions) == dict:
+            for d in self.get_dataset(dataset):
+                if not d['word'] in labels_per_word:
+                    labels_per_word[d['word']] = [[],[]]
+                labels_per_word[d['word']][0].append(d['label'])
+                labels_per_word[d['word']][1].append(predictions[d['id']])
+
+        elif type(predictions) == list:
+            for i, d in enumerate(self.get_dataset(dataset)):
+                if not d['word'] in labels_per_word:
+                    labels_per_word[d['word']] = [[],[]]
+                labels_per_word[d['word']][0].append(d['label'])
+                labels_per_word[d['word']][1].append(predictions[i])
+
+        metric_names = {'ari': adjusted_rand_score, 'purity': purity}
+        reverse_metric_names = {v : k for (k, v) in metric_names.items()}
+        metric_functions = set()
+        for metric in metrics:
+            if type(metric) == str:
+                try:
+                    metric = metric_names[metric]
+                except KeyError:
+                    logging.error(f'{metric} does not define a metric.')
+                    continue
+            metric_functions.add(metric)
+
+        scores = {}
+        for metric in metric_functions:
+            if metric in reverse_metric_names:
+                scores[reverse_metric_names[metric]] = {}
+            for word, labels in labels_per_word.items():
+                gold_labels, pred_labels = labels
+                if metric in reverse_metric_names:
+                    scores[reverse_metric_names[metric]][word] = metric(gold_labels, pred_labels)
+
+        return scores
+
+    def evaluate_ari(self, predictions, dataset = 'all'):
+        return self.evaluate(predictions, {adjusted_rand_score}, dataset)
+    
+    def evaluate_purity(self, predictions, dataset = 'all'):
+        return self.evaluate(predictions, {purity}, dataset)
