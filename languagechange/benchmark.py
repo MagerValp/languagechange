@@ -399,7 +399,7 @@ class DWUG(Benchmark):
         wic.load_from_data(data)
         return wic
     
-    def get_usages_and_senses(self, remove_outliers = True): #So far this is very similar to the cast_to_WSD function
+    def get_usages_and_senses(self, remove_outliers = True):
         data = []
         for word in self.stats_groupings:
             usages_by_id = {}
@@ -427,16 +427,12 @@ class DWUG(Benchmark):
         data = self.get_usages_and_senses(remove_outliers)
         wsd = WSD()
         wsd.load_from_data(data)
-        for d in data:
-            wsd.target_words.add(d['word'])
         return wsd
 
     def cast_to_WSI(self, remove_outliers = True):
         data = self.get_usages_and_senses(remove_outliers)
         wsi = WSI()
         wsi.load_from_data(data)
-        for d in data:
-            wsi.target_words.add(d['word'])
         return wsi
     
     def cluster_evaluation(self, predictions, metrics = {'ari', 'purity'}, remove_outliers = True):
@@ -1037,6 +1033,12 @@ class WSI(Benchmark):
             self.data = {'all': data}
         elif type(data) == dict:
             self.data = data
+
+        # Add the lemma in each data example to the set of target words
+        for dataset in self.data.values():
+            for d in dataset:
+                if 'word' in d.keys():
+                    self.target_words.add(d['word'])
 
     def evaluate(self, predictions, metrics = {'ari','purity'}, dataset = 'all'):
         """
