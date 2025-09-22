@@ -654,7 +654,7 @@ class DWUG(SemanticChangeEvaluationDataset):
             raise e
         
         if return_list:
-            return judgments.values()
+            return list(judgments.values())
         return judgments
 
     def get_stats(self):
