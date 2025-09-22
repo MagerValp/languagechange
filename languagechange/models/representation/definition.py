@@ -28,7 +28,12 @@ class Message(TypedDict):
 
 Dialog = Sequence[Message]
 
-class LlamaDefinitionGenerator:
+# TEMP
+class DefinitionGenerator:
+    def __init__(self):
+        pass
+
+class LlamaDefinitionGenerator(DefinitionGenerator):
     """
     A tool to create short, clear definitions for words based on example sentences
     using fine-tuned Llama models.
@@ -263,7 +268,7 @@ class DefinitionOutput(BaseModel):
     example: str = Field(description="The example sentence")
     definition: str = Field(description="The definition of the target word as used in the sentence")
 
-class ChatModelDefinitionGenerator:
+class ChatModelDefinitionGenerator(DefinitionGenerator):
     """
     A model to generate concise definitions for target words using a chat model with structured output.
 
@@ -366,7 +371,7 @@ class ChatModelDefinitionGenerator:
 
 
 
-class T5DefinitionGenerator:
+class T5DefinitionGenerator(DefinitionGenerator):
     """Generates word definitions using a T5 model."""
 
     def __init__(self, model_path, bsize=4, max_length=256, filter_target=True,
