@@ -1,7 +1,7 @@
 from languagechange.resource_manager import LanguageChange
 from languagechange.corpora import LinebyLineCorpus
 from languagechange.models.representation.contextualized import ContextualizedModel
-from languagechange.models.representation.definition import DefinitionGenerator #TODO: add the definition generator super class to main branch
+from languagechange.models.representation.definition import DefinitionGenerator
 from languagechange.models.representation.prompting import PromptModel
 from languagechange.usages import Target, TargetUsage, TargetUsageList, DWUGUsage
 from languagechange.utils import NumericalTime, LiteralTime
@@ -75,8 +75,8 @@ class Benchmark():
             return self.data['all']
         else:
             all_data = []
-            for dataset in self.data.values():
-                all_data += dataset
+            for k in set(self.data.keys()).difference({'all'}):
+                all_data += self.data[k]
             return all_data
         
     def split_train_dev_test(self, train_prop = 0.8, dev_prop = 0.1, test_prop = 0.1, shuffle = True, epsilon = 1e-6):
@@ -84,9 +84,11 @@ class Benchmark():
             if s in self.data.keys():
                 logging.info(f'Dataset already contains a {s} set.')
         if not 'all' in self.data.keys():
-            self.data['all'] = []
-            for dataset in self.data.values():
-                self.data['all'].extend(dataset)
+            data = []
+            for k in set(self.data.keys()).difference({'all'}):
+                data.extend(self.data[k])
+        else:
+            data = self.data['all']
         
         try:
             assert abs(1 - (train_prop + dev_prop + test_prop)) < epsilon
@@ -95,16 +97,18 @@ class Benchmark():
             return None
 
         if shuffle:
-            data = random.sample(self.data['all'], len(self.data['all']))
-        else:
-            data = self.data['all']
+            data = random.sample(data, len(data))
             
         train_offset = int(len(data) * train_prop)
-        dev_offset = train_offset + int(len(data) * dev_prop)
+        dev_offset = int(len(data) * (train_prop + dev_prop))
 
         self.data['train'] = data[:train_offset]
         self.data['dev'] = data[train_offset:dev_offset]
         self.data['test'] = data[dev_offset:]
+
+        for s in {'train','dev','test'}:
+            if self.data[s] == []:
+                del self.data[s]
 
     def get_data_by_word(self, dataset, word):
         dataset = self.get_dataset(dataset)
@@ -191,7 +195,7 @@ class SemanticChangeEvaluationDataset(Benchmark):
 
 class SemEval2020Task1(SemanticChangeEvaluationDataset):
 
-    def __init__(self, language, subset:int=None):
+    def __init__(self, language, subset:int=None, config='opt'):
         lc = LanguageChange()
         self.language = language
         if self.language == 'NO' or self.language == 'RU':
@@ -205,6 +209,7 @@ class SemEval2020Task1(SemanticChangeEvaluationDataset):
         home_path = lc.get_resource('benchmarks', self.dataset, self.language, 'no-version')
         semeval_folder = os.listdir(home_path)[0]
         self.home_path = os.path.join(home_path,semeval_folder)
+        self.config = config
         self.load()
 
     def load(self):
@@ -219,7 +224,7 @@ class SemEval2020Task1(SemanticChangeEvaluationDataset):
         self.target_words = set()
 
         if self.language == 'NO':
-            with open(os.path.join(self.home_path, f'subset{self.subset}', 'stats/stats_groupings.tsv')) as f:
+            with open(os.path.join(self.home_path, f'subset{self.subset}/stats/{self.config}/stats_groupings.tsv')) as f:
                 for line in islice(f, 1, None):
                     line = line.strip('\n').split('\t')
                     word, binary, graded = line[0], line[11], line[14]
@@ -258,7 +263,7 @@ class SemEval2020Task1(SemanticChangeEvaluationDataset):
         group = str(group)
         usages = TargetUsageList()
         if self.dataset == 'NorDiaChange':
-            with open(os.path.join(self.home_path,f'subset{self.subset}','data',word,'uses.csv')) as f:
+            with open(os.path.join(self.home_path,f'subset{self.subset}','data',word,'uses.tsv')) as f:
                 keys = []
                 for j,line in enumerate(f):
                     line = line.replace('\n','').split('\t')
@@ -654,7 +659,7 @@ class DWUG(SemanticChangeEvaluationDataset):
             raise e
         
         if return_list:
-            return list(judgments.values())
+            return judgments.values()
         return judgments
 
     def get_stats(self):
